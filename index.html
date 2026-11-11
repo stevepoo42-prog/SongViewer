@@ -129,6 +129,8 @@
   .qrov .row { justify-content:center; flex-wrap:wrap; } .qrov .row > * { flex:none; }
   .bar { width:min(86vw,560px); height:14px; background:#333; border-radius:7px; overflow:hidden; }
   .bar > i { display:block; height:100%; width:0; background:#30d158; transition:width .15s; }
+  .pdfopt { display:flex; align-items:center; gap:12px; padding:9px 2px; font-size:17px; }
+  .pdfopt input { width:24px; height:24px; flex:none; }
   #toast { position:fixed; left:50%; bottom:90px; transform:translateX(-50%); background:#3a3a3c; color:#fff; padding:10px 18px; border-radius:20px; z-index:70; display:none; max-width:90vw; }
   .info { color:var(--muted); font-size:14px; line-height:1.4; }
 </style>
@@ -391,9 +393,9 @@ function splitWords(L, firstMax, nextMax) {
   }
   return segs;
 }
-function wrapTrail(lead, cl, max) {                  // lyric + its chords at the end; chords stay together on the last line
+function wrapTrail(lead, cl, max, wrap = wrapOn) {                  // lyric + its chords at the end; chords stay together on the last line
   const L = lead.replace(/\s+$/, '');
-  if (!wrapOn || max < 24 || L.length + (L && cl ? 1 : 0) + cl.length <= max) return [{ s: cl ? lead : L, cl }];
+  if (!wrap || max < 24 || L.length + (L && cl ? 1 : 0) + cl.length <= max) return [{ s: cl ? lead : L, cl }];
   const out = splitWords(L, max, max - PFX.length).map((g, i) => ({ s: (i ? PFX : '') + L.slice(g.a, g.b), cl: '' }));
   if (!cl) return out;
   const last = out[out.length - 1];
@@ -402,10 +404,10 @@ function wrapTrail(lead, cl, max) {                  // lyric + its chords at th
   pieces.forEach((g, i) => out.push({ s: (last || i) ? PFX : '', cl: cl.trim().slice(g.a, g.b) }));
   return out;
 }
-function wrapUnit(u, max, showCh) {
+function wrapUnit(u, max, showCh, wrap = wrapOn) {
   const L = (u.s || '').replace(/\s+$/, ''), C = (u.c || '').replace(/\s+$/, '');
   const plain = [{ c: u.c, s: L, cont: false }];
-  if (!wrapOn || max < 24 || Math.max(L.length, showCh ? C.length : 0) <= max) return plain;
+  if (!wrap || max < 24 || Math.max(L.length, showCh ? C.length : 0) <= max) return plain;
   const chs = []; { const re = /\S+/g; let m; while ((m = re.exec(C))) chs.push({ i: m.index, t: m[0] }); }
   const place = (cur, col, tok) => { if (cur.length < col) cur = cur.padEnd(col); else if (cur.length && !cur.endsWith(' ')) cur += ' '; return cur + tok; };
 
@@ -447,52 +449,43 @@ function wrapUnit(u, max, showCh) {
   });
 }
 
-function build() {
-  const box = $('song');
-  $('empty').style.display = curSong ? 'none' : 'flex';
-  if (!curSong) { box.innerHTML = ''; return null; }
-  const flats = flatsFor(curSong, shift);
-  const frag = document.createDocumentFragment();
-  const h = document.createElement('h1'); h.textContent = curSong.title; frag.appendChild(h);
-  const meta = document.createElement('div'); meta.className = 'meta';
-  const nowKey = keyLabel((noteIndex(curSong.key[0], curSong.key[1] || '') + shift) % 12, curSong.minor, flats);
-  const origKey = keyLabel(noteIndex(curSong.key[0], curSong.key[1] || ''), curSong.minor, flatsFor(curSong, 0));
-  meta.textContent = [curSong.artist, curSong.capo, 'Key: ' + nowKey + (shift ? '  (original ' + origKey + ')' : '')].filter(Boolean).join('  ·  ');
-  frag.appendChild(meta);
+const secKey = n => {
+  n = (n || '').toLowerCase();
+  if (/^intro/.test(n)) return 'intro';
+  if (/^verse/.test(n)) return 'verse';
+  if (/^(pre[- ]?chorus|chorus|refrain)/.test(n)) return 'chorus';
+  if (/^bridge/.test(n)) return 'bridge';
+  if (/^(solo|instrumental|interlude|break)/.test(n)) return 'solo';
+  if (/^(outro|ending|coda|tag)/.test(n)) return 'outro';
+  return '';
+};
 
-  const el = (cls, txt) => { const d = document.createElement('div'); d.className = cls; if (txt != null) d.textContent = txt; return d; };
-  const showCh = !document.body.classList.contains('nochords');
-  // how many characters fit across the screen at the current font size
-  const probe = el('line', '0'.repeat(50)); probe.style.cssText = 'position:absolute;visibility:hidden';
-  document.body.appendChild(probe); const charW = probe.getBoundingClientRect().width / 50; probe.remove();
-  const maxCols = Math.floor((window.innerWidth - 52) / charW);
+/* Works out what to show for a song: header text and a list of rows (blank / section / group of lines).
+   Used for the screen (build) and for PDF printing. o = { maxCols, showCh, join, wrap } */
+function layoutSong(song, shiftN, o) {
+  const { maxCols, showCh, join, wrap } = o;
+  const flats = flatsFor(song, shiftN);
+  const nowKey = keyLabel((noteIndex(song.key[0], song.key[1] || '') + shiftN) % 12, song.minor, flats);
+  const origKey = keyLabel(noteIndex(song.key[0], song.key[1] || ''), song.minor, flatsFor(song, 0));
+  const head = { title: song.title, artist: song.artist || '', capo: song.capo || '', key: nowKey, origKey,
+    meta: [song.artist, song.capo, 'Key: ' + nowKey + (shiftN ? '  (original ' + origKey + ')' : '')].filter(Boolean).join('  ·  ') };
 
   // pass 1: turn parsed lines into items
   const items = []; let pend = null;
   const flushPend = () => { if (pend != null) { items.push({ k: 'unit', t: 'chordonly', c: pend, s: '' }); pend = null; } };
-  for (const l of curSong.lines) {
+  for (const l of song.lines) {
     if (l.t === 'blank' || l.t === 'section') { flushPend(); items.push({ k: l.t, s: l.s }); }
-    else if (l.t === 'chords') { flushPend(); pend = transposeChordLine(l.s, shift, flats); }
+    else if (l.t === 'chords') { flushPend(); pend = transposeChordLine(l.s, shiftN, flats); }
     else if (l.t === 'lyric') { items.push({ k: 'unit', t: 'lyric', c: pend, s: l.s }); pend = null; }
-    else if (l.t === 'trail') { flushPend(); items.push({ k: 'unit', t: 'trail', lead: l.lead, cl: l.cl.replace(/\[([^\]]*)\]/g, (m, c) => CHORD_RE.test(c) ? '[' + transposeChord(c, shift, flats) + ']' : m) }); }
-    else { items.push({ k: 'unit', t: 'inline', segs: l.segs.map(g => ({ c: g.c ? transposeChord(g.c, shift, flats) : '', l: g.l })) }); pend = null; }
+    else if (l.t === 'trail') { flushPend(); items.push({ k: 'unit', t: 'trail', lead: l.lead, cl: l.cl.replace(/\[([^\]]*)\]/g, (m, c) => CHORD_RE.test(c) ? '[' + transposeChord(c, shiftN, flats) + ']' : m) }); }
+    else { items.push({ k: 'unit', t: 'inline', segs: l.segs.map(g => ({ c: g.c ? transposeChord(g.c, shiftN, flats) : '', l: g.l })) }); pend = null; }
   }
   flushPend();
 
-  const secKey = n => {
-    n = (n || '').toLowerCase();
-    if (/^intro/.test(n)) return 'intro';
-    if (/^verse/.test(n)) return 'verse';
-    if (/^(pre[- ]?chorus|chorus|refrain)/.test(n)) return 'chorus';
-    if (/^bridge/.test(n)) return 'bridge';
-    if (/^(solo|instrumental|interlude|break)/.test(n)) return 'solo';
-    if (/^(outro|ending|coda|tag)/.test(n)) return 'outro';
-    return '';
-  };
   let cur = '';
   // try to join two lyric lines into "one, two"
   const tryJoin = (a, b) => {
-    if (!joinMode) return null;
+    if (!join) return null;
     if (a.t === 'lyric' && b.t === 'lyric') {
       const l1 = a.s.replace(/\s+$/, '');
       let l2 = b.s, c2 = b.c || '';
@@ -518,52 +511,85 @@ function build() {
     return null;
   };
 
-  // pass 2: emit, joining pairs greedily within each block
-  const emit = u => {
+  // pass 2: rows, joining pairs greedily within each block
+  const rows = [];
+  const add = u => {
     if (u.t === 'trail') {
-      wrapTrail(u.lead, showCh ? u.cl : '', maxCols).forEach((ln, i) => {
+      wrapTrail(u.lead, showCh ? u.cl : '', maxCols, wrap).forEach((ln, i) => {
         if (!ln.s.trim() && !ln.cl) return;
-        const r2 = el('row2' + (i ? ' cont' : '') + (cur ? ' sec-' + cur : '')), un2 = el('unit'), d = el('line');
-        if (ln.s) d.appendChild(document.createTextNode(ln.s));
-        if (ln.cl) { const sp = document.createElement('span'); sp.className = 'tc'; sp.textContent = ln.cl; d.appendChild(sp); }
-        un2.appendChild(d); r2.appendChild(un2); frag.appendChild(r2);
+        rows.push({ k: 'group', sec: cur, cont: i > 0, lines: [{ t: 'trail', s: ln.s, cl: ln.cl }] });
       });
-      return;
-    }
-    const row = el('row2' + (cur ? ' sec-' + cur : '')), unit = el('unit');
-    if (u.t === 'inline') {
-      const d = el('line inline');
-      for (const sg of u.segs) {
-        const sp = document.createElement('span'); sp.className = 'seg';
-        const c = document.createElement('span'); c.className = 'c'; c.textContent = sg.c;
-        const t = document.createElement('span'); t.className = 'l'; t.textContent = sg.l;
-        sp.append(c, t); d.appendChild(sp);
-      }
-      unit.appendChild(d);
+    } else if (u.t === 'inline') {
+      rows.push({ k: 'group', sec: cur, cont: false, lines: [{ t: 'inline', segs: u.segs }] });
     } else {
-      wrapUnit(u, maxCols, showCh).forEach((ln, i) => {
-        const r2 = i ? el('row2 cont' + (cur ? ' sec-' + cur : '')) : row, un2 = i ? el('unit') : unit;
-        if (ln.c != null && ln.c.trim()) un2.appendChild(el('line chords', ln.c));
-        if (u.t !== 'chordonly') un2.appendChild(el('line', ln.s));
-        if (i) { r2.appendChild(un2); frag.appendChild(r2); } else { row.appendChild(unit); frag.appendChild(row); }
+      wrapUnit(u, maxCols, showCh, wrap).forEach((ln, i) => {
+        const lines = [];
+        if (ln.c != null && ln.c.trim()) lines.push({ t: 'chords', s: ln.c });
+        if (u.t !== 'chordonly') lines.push({ t: 'lyric', s: ln.s });
+        rows.push({ k: 'group', sec: cur, cont: i > 0, lines });
       });
-      return;
     }
-    row.appendChild(unit); frag.appendChild(row);
   };
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
-    if (it.k === 'blank') frag.appendChild(el('line blank'));
-    else if (it.k === 'section') { cur = secKey(it.s); frag.appendChild(el('line section' + (cur ? ' sec-' + cur : ''), it.s)); }
+    if (it.k === 'blank') rows.push({ k: 'blank' });
+    else if (it.k === 'section') { cur = secKey(it.s); rows.push({ k: 'section', s: it.s, sec: cur }); }
     else {
       const nx = items[i + 1];
       const j = nx && nx.k === 'unit' ? tryJoin(it, nx) : null;
-      if (j) { emit(j); i++; } else emit(it);
+      if (j) { add(j); i++; } else add(it);
     }
   }
-  box.replaceChildren(frag);
-  return flats;
+  return { head, rows, flats };
 }
+
+function renderRows(rows, frag) {                      // the on-screen look of a laid-out song
+  const el = (cls, txt) => mk('div', cls, txt);
+  for (const r of rows) {
+    if (r.k === 'blank') { frag.appendChild(el('line blank')); continue; }
+    if (r.k === 'section') { frag.appendChild(el('line section' + (r.sec ? ' sec-' + r.sec : ''), r.s)); continue; }
+    const row = el('row2' + (r.cont ? ' cont' : '') + (r.sec ? ' sec-' + r.sec : '')), unit = el('unit');
+    for (const ln of r.lines) {
+      if (ln.t === 'chords') unit.appendChild(el('line chords', ln.s));
+      else if (ln.t === 'lyric') unit.appendChild(el('line', ln.s));
+      else if (ln.t === 'trail') {
+        const d = el('line');
+        if (ln.s) d.appendChild(document.createTextNode(ln.s));
+        if (ln.cl) { const sp = document.createElement('span'); sp.className = 'tc'; sp.textContent = ln.cl; d.appendChild(sp); }
+        unit.appendChild(d);
+      } else {
+        const d = el('line inline');
+        for (const sg of ln.segs) {
+          const sp = document.createElement('span'); sp.className = 'seg';
+          const c = document.createElement('span'); c.className = 'c'; c.textContent = sg.c;
+          const t = document.createElement('span'); t.className = 'l'; t.textContent = sg.l;
+          sp.append(c, t); d.appendChild(sp);
+        }
+        unit.appendChild(d);
+      }
+    }
+    row.appendChild(unit); frag.appendChild(row);
+  }
+}
+
+function build() {
+  const box = $('song');
+  $('empty').style.display = curSong ? 'none' : 'flex';
+  if (!curSong) { box.innerHTML = ''; return null; }
+  const showCh = !document.body.classList.contains('nochords');
+  // how many characters fit across the screen at the current font size
+  const probe = mk('div', 'line', '0'.repeat(50)); probe.style.cssText = 'position:absolute;visibility:hidden';
+  document.body.appendChild(probe); const charW = probe.getBoundingClientRect().width / 50; probe.remove();
+  const maxCols = Math.floor((window.innerWidth - 52) / charW);
+  const L = layoutSong(curSong, shift, { maxCols, showCh, join: joinMode, wrap: wrapOn });
+  const frag = document.createDocumentFragment();
+  const h = document.createElement('h1'); h.textContent = L.head.title; frag.appendChild(h);
+  const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = L.head.meta; frag.appendChild(meta);
+  renderRows(L.rows, frag);
+  box.replaceChildren(frag);
+  return L.flats;
+}
+
 function render() { const f = build(); if (curSong) { renderKeys(f); fit(); } }
 
 function keyLabel(idx, minor, flats) {
@@ -897,12 +923,14 @@ function renderActions() {
     if (t === 'set') {
       const sh = btn('Share via AirDrop…', () => shareSets([...lib.selSets])), bc = btn('Broadcast (QR)…', () => startBroadcast([...lib.selSets]));
       sh.disabled = bc.disabled = lib.selSets.size === 0; bar.append(sh, bc, btn('Receive (QR)…', startReceive));
+      const pb = btn('PDF…', () => printLists([...lib.selSets].map(id => sets.find(x => x.id === id)).filter(Boolean))); pb.disabled = lib.selSets.size === 0; bar.appendChild(pb);
       if (lib.selSets.size) bar.appendChild(mk('span', 'info', lib.selSets.size + ' selected'));
     }
     return;
   } else {
     bar.appendChild(btn('＋ Add songs…', addSongsToView, 'primary'));
     if (lib.view.type === 'set') bar.append(btn('Share via AirDrop…', () => shareSets([lib.view.id])), btn('Broadcast (QR)…', () => startBroadcast([lib.view.id])));
+    if (lib.view.type === 'book' || lib.view.type === 'set') bar.appendChild(btn('PDF…', () => printLists([listOf(lib.view.type, lib.view.id)])));
     if (lib.view.type === 'book') bar.appendChild(dis(btn('Add to Set…', () => addToList('set', ids))));
     bar.appendChild(dis(btn('Remove from ' + lib.view.type, () => removeFromList(ids), 'danger')));
   }
@@ -931,8 +959,8 @@ function backupDialog() {
     box.appendChild(btn('Close', () => close()));
   });
 }
-async function shareFile(name, json) {         // the share sheet (AirDrop, Messages, Files...) or, elsewhere, a plain download
-  const file = new File([json], name, { type: 'application/json' });
+async function shareFile(name, data, type = 'application/json') {   // the share sheet (AirDrop, Messages, Files, Print...) or, elsewhere, a plain download
+  const file = new File([data], name, { type });
   try {
     if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: name });
     else {
@@ -1162,7 +1190,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v15 · 11 Nov 15:00';   // bump on every commit
+const APP_VERSION = 'v16 · 11 Nov 15:09';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
@@ -1406,6 +1434,207 @@ function stopReceive() {
 }
 $('rcvCancel').onclick = stopReceive;
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && RCV.running) stopReceive(); });   // never leave the camera on
+
+/* ---------- Print sets or books as PDF ---------- */
+// A small PDF writer (the standard Courier/Helvetica fonts, no libraries). Each song gets its own page(s), laid out with the
+// same line-joining/wrapping/chord logic as the screen, with the text size chosen so the song fits the page.
+const PDF_PAPER = { a4: { w: 595.28, h: 841.89, name: 'A4' }, letter: { w: 612, h: 792, name: 'Letter' } };
+const PDF = { mx: 42, top: 42, bottom: 48, FS_MAX: 14, FS_MIN: 8, FS_FLOW: 10, CW: 0.6, LEAD: 1.18 };
+const WINANSI = { 0x20AC: 0x80, 0x201A: 0x82, 0x0192: 0x83, 0x201E: 0x84, 0x2026: 0x85, 0x2020: 0x86, 0x2021: 0x87, 0x02C6: 0x88, 0x2030: 0x89, 0x0160: 0x8A,
+  0x2039: 0x8B, 0x0152: 0x8C, 0x017D: 0x8E, 0x2018: 0x91, 0x2019: 0x92, 0x201C: 0x93, 0x201D: 0x94, 0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97, 0x02DC: 0x98,
+  0x2122: 0x99, 0x0161: 0x9A, 0x203A: 0x9B, 0x0153: 0x9C, 0x017E: 0x9E, 0x0178: 0x9F };
+const PDF_SUBST = { '♯': '#', '♭': 'b', '♮': '', '▸': '>', '►': '>', '→': '->', ' ': ' ', '\t': ' ', ' ': ' ', '​': '' };
+function pdfPlain(str) {                                      // unicode -> characters the standard PDF fonts have (WinAnsi); others become "?"
+  let o = '';
+  for (let ch of String(str).normalize('NFC')) {
+    if (PDF_SUBST[ch] !== undefined) ch = PDF_SUBST[ch];
+    for (const c2 of ch) {
+      const c = c2.codePointAt(0);
+      o += String.fromCharCode((c >= 32 && c < 127) || (c >= 0xA0 && c < 256) ? c : (WINANSI[c] || (c < 32 ? 32 : 63)));
+    }
+  }
+  return o;
+}
+const pdfEsc = plain => plain.replace(/([\\()])/g, '\\$1');
+const pdfOp = (font, size, x, yTop, H, plain) => 'BT /' + font + ' ' + size.toFixed(2) + ' Tf ' + x.toFixed(2) + ' ' + (H - yTop).toFixed(2) + ' Td (' + pdfEsc(plain) + ') Tj ET';
+const pdfRule = (x1, x2, yTop, H, gray) => gray.toFixed(2) + ' G 0.6 w ' + x1.toFixed(2) + ' ' + (H - yTop).toFixed(2) + ' m ' + x2.toFixed(2) + ' ' + (H - yTop).toFixed(2) + ' l S 0 G';
+
+function buildPDF(pages, title) {                             // pages: [{ w, h, ops: [] }]  ->  Uint8Array
+  const objs = [], add = body => { objs.push(body); return objs.length; };
+  add('<< /Type /Catalog /Pages 2 0 R >>'); add('');
+  ['Courier', 'Courier-Bold', 'Helvetica-Bold', 'Helvetica'].forEach(f => add('<< /Type /Font /Subtype /Type1 /BaseFont /' + f + ' /Encoding /WinAnsiEncoding >>'));
+  const kids = [];
+  pages.forEach(pg => {
+    const st = pg.ops.join('\n');
+    const c = add('<< /Length ' + st.length + ' >>\nstream\n' + st + '\nendstream');
+    kids.push(add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + pg.w.toFixed(2) + ' ' + pg.h.toFixed(2) + '] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents ' + c + ' 0 R >>') + ' 0 R');
+  });
+  objs[1] = '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pages.length + ' >>';
+  const info = add('<< /Title (' + pdfEsc(pdfPlain(title)) + ') /Producer (SongViewer) >>');
+  let out = '%PDF-1.4\n%\xE2\xE3\xCF\xD3\n'; const offs = [];
+  objs.forEach((b, i) => { offs.push(out.length); out += (i + 1) + ' 0 obj\n' + b + '\nendobj\n'; });
+  const xref = out.length;
+  out += 'xref\n0 ' + (objs.length + 1) + '\n0000000000 65535 f \n' + offs.map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('');
+  out += 'trailer\n<< /Size ' + (objs.length + 1) + ' /Root 1 0 R /Info ' + info + ' 0 R >>\nstartxref\n' + xref + '\n%%EOF\n';
+  const u8 = new Uint8Array(out.length); for (let i = 0; i < out.length; i++) u8[i] = out.charCodeAt(i) & 255;
+  return u8;
+}
+
+function pdfBlocks(rows, fs, maxCols, showCh) {               // rows from layoutSong -> blocks with a height, ready to place on a page
+  const lead = fs * PDF.LEAD, blocks = [];
+  const group = (lines, cont) => blocks.push({ kind: 'group', lines, h: lines.length * lead + fs * (cont ? 0.04 : 0.34), top: fs * (cont ? 0.04 : 0.34) });
+  for (const r of rows) {
+    if (r.k === 'blank') { blocks.push({ kind: 'blank', blank: true, h: lead * 0.55 }); continue; }
+    if (r.k === 'section') { blocks.push({ kind: 'section', keep: true, h: fs * 0.55 + fs * 1.15, text: pdfPlain(r.s).replace(/:\s*$/, '').toUpperCase() }); continue; }
+    if (r.lines.length === 1 && r.lines[0].t === 'inline') {  // [G]word style: chords above the words, wrapped like any other line
+      let ch = '', ly = '';
+      for (const g of r.lines[0].segs) { if (g.c && showCh) { const col = Math.max(ly.length, ch ? ch.length + 1 : 0); ch = ch.padEnd(col) + g.c; } ly += g.l; }
+      wrapUnit({ t: 'lyric', c: ch || null, s: ly }, maxCols, showCh, true).forEach((w, i) => {
+        const lines = []; if (w.c && w.c.trim()) lines.push([{ t: pdfPlain(w.c), f: 'F2' }]); lines.push([{ t: pdfPlain(w.s), f: 'F1' }]); group(lines, r.cont || i > 0);
+      });
+      continue;
+    }
+    const lines = [];
+    for (const ln of r.lines) {
+      if (ln.t === 'chords') lines.push([{ t: pdfPlain(ln.s), f: 'F2' }]);
+      else if (ln.t === 'lyric') lines.push([{ t: pdfPlain(ln.s), f: 'F1' }]);
+      else lines.push([{ t: pdfPlain(ln.s), f: 'F1' }].concat(ln.cl ? [{ t: pdfPlain(ln.cl), f: 'F2' }] : []));
+    }
+    group(lines, r.cont);
+  }
+  while (blocks.length && blocks[blocks.length - 1].blank) blocks.pop();
+  while (blocks.length && blocks[0].blank) blocks.shift();
+  return blocks;
+}
+function pdfPaginate(blocks, firstAvail, nextAvail) {
+  const pages = [[]]; let used = 0, avail = firstAvail;
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i], need = b.h + (b.keep && blocks[i + 1] ? blocks[i + 1].h : 0);
+    if (used + need > avail && used > 0) { pages.push([]); used = 0; avail = nextAvail; }
+    if (used === 0 && b.blank && pages.length > 1) continue;
+    pages[pages.length - 1].push({ b, y: used }); used += b.h;
+  }
+  return pages;
+}
+function pdfSong(song, shiftN, opt, paper) {                  // -> { pages: [{ ops }], fs }
+  const W = paper.w - 2 * PDF.mx, H = paper.h;
+  const tryFs = f => {
+    const maxCols = Math.floor(W / (PDF.CW * f));
+    const L = layoutSong(song, shiftN, { maxCols, showCh: opt.chords, join: opt.join, wrap: true });
+    return { L, blocks: pdfBlocks(L.rows, f, maxCols, opt.chords) };
+  };
+  const head = layoutSong(song, shiftN, { maxCols: 80, showCh: opt.chords, join: false, wrap: true }).head;
+  const tfs = Math.max(12, Math.min(20, W / (Math.max(1, head.title.length) * 0.6)));
+  const headerH = tfs * 1.2 + 13 + 14, contH = 26;
+  const availFirst = H - PDF.top - headerH - PDF.bottom, availNext = H - PDF.top - contH - PDF.bottom;
+  let fs = opt.fit ? 0 : opt.size, t = null;
+  if (opt.fit) {
+    for (let f = PDF.FS_MAX; f >= PDF.FS_MIN - 1e-9; f -= 0.25) {
+      const c = tryFs(f);
+      if (c.blocks.reduce((a, b) => a + b.h, 0) <= availFirst) { fs = f; t = c; break; }
+    }
+    if (!t) fs = PDF.FS_FLOW;                                 // too long for one page at any readable size: let it flow onto more pages
+  }
+  if (!t) t = tryFs(fs);
+  const pages = pdfPaginate(t.blocks, availFirst, availNext).map((items, pi) => {
+    const ops = [], lead = fs * PDF.LEAD, x0 = PDF.mx; let bodyTop;
+    if (pi === 0) {
+      ops.push(pdfOp('F3', tfs, x0, PDF.top + tfs * 0.92, H, pdfPlain(head.title)));
+      ops.push(pdfOp('F4', 10.5, x0, PDF.top + tfs * 1.2 + 11, H, pdfPlain([head.artist, head.capo, 'Key: ' + head.key + (head.key !== head.origKey ? '  (original ' + head.origKey + ')' : '')].filter(Boolean).join('   ·   '))));
+      ops.push(pdfRule(x0, x0 + W, PDF.top + headerH - 6, H, 0.55));
+      bodyTop = PDF.top + headerH;
+    } else {
+      ops.push(pdfOp('F4', 10, x0, PDF.top + 11, H, pdfPlain(head.title + ' (continued)')));
+      ops.push(pdfRule(x0, x0 + W, PDF.top + contH - 8, H, 0.7));
+      bodyTop = PDF.top + contH;
+    }
+    for (const { b, y } of items) {
+      const yt = bodyTop + y;
+      if (b.kind === 'section') ops.push(pdfOp('F3', fs * 0.92, x0, yt + fs * 0.55 + fs * 0.9, H, b.text));
+      else if (b.kind === 'group') b.lines.forEach((segs, k) => {
+        let x = x0; const base = yt + b.top + k * lead + fs * 0.92;
+        segs.forEach(sg => { ops.push(pdfOp(sg.f, fs, x, base, H, sg.t)); x += PDF.CW * fs * sg.t.length; });
+      });
+    }
+    return { ops };
+  });
+  return { pages, fs };
+}
+function pdfCoverPages(sec, paper, opt, firstPage) {         // the set-list page(s)
+  const W = paper.w - 2 * PDF.mx, H = paper.h, fs = 12.5, lead = fs * 1.55, cols = Math.floor(W / (PDF.CW * fs));
+  const top1 = PDF.top + 70, perPage1 = Math.floor((H - top1 - PDF.bottom) / lead), perPageN = Math.floor((H - PDF.top - 20 - PDF.bottom) / lead);
+  const pages = []; let i = 0, n = 0;
+  const date = new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
+  while (i < sec.songs.length || !pages.length) {
+    const ops = [], first = pages.length === 0, per = first ? perPage1 : perPageN; let y = first ? top1 : PDF.top + 20;
+    if (first) {
+      ops.push(pdfOp('F3', 26, PDF.mx, PDF.top + 24, H, pdfPlain(sec.lst.name)));
+      ops.push(pdfOp('F4', 11, PDF.mx, PDF.top + 44, H, pdfPlain(sec.songs.length + ' song' + (sec.songs.length === 1 ? '' : 's') + '   ·   ' + date)));
+      ops.push(pdfRule(PDF.mx, PDF.mx + W, PDF.top + 54, H, 0.55));
+    } else ops.push(pdfOp('F4', 10, PDF.mx, PDF.top + 11, H, pdfPlain(sec.lst.name + ' (continued)')));
+    for (let k = 0; k < per && i < sec.songs.length; k++, i++) {
+      const e = sec.songs[i], right = pdfPlain(sec.keys[i].padStart(4) + '   p.' + sec.start[i]);
+      let left = pdfPlain(String(i + 1).padStart(2, '0') + '  ' + (e.name.replace(/\.[^.]+$/, '')));
+      const room = cols - right.length - 3; if (left.length > room) left = left.slice(0, Math.max(4, room - 3)) + '...';
+      const dots = ' ' + '.'.repeat(Math.max(2, cols - left.length - right.length - 2)) + ' ';
+      ops.push(pdfOp('F1', fs, PDF.mx, y + fs, H, left + dots + right)); y += lead;
+    }
+    pages.push({ ops }); n++;
+    if (n > 60) break;
+  }
+  return pages;
+}
+function buildListsPDF(lists, opt) {
+  const paper = PDF_PAPER[opt.paper] || PDF_PAPER.a4;
+  const secs = lists.map(lst => {
+    const songs = lst.ids.map(songById).filter(Boolean);
+    const built = songs.map(e => pdfSong(parseSong(e.name, e.text), e.shift || 0, opt, paper));
+    const keys = songs.map((e, i) => { const h = layoutSong(parseSong(e.name, e.text), e.shift || 0, { maxCols: 80, showCh: true, join: false, wrap: true }).head; return h.key; });
+    return { lst, songs, built, keys, start: [] };
+  });
+  let pageNo = 1;
+  secs.forEach(sec => {                                       // page numbers: set-list page(s) first, then each song
+    const perPage1 = Math.floor((paper.h - PDF.top - 70 - PDF.bottom) / (12.5 * 1.55)), perPageN = Math.floor((paper.h - PDF.top - 20 - PDF.bottom) / (12.5 * 1.55));
+    sec.coverCount = opt.cover ? 1 + Math.max(0, Math.ceil((sec.songs.length - perPage1) / perPageN)) : 0;
+    pageNo += sec.coverCount; sec.built.forEach(b => { sec.start.push(pageNo); pageNo += b.pages.length; });
+  });
+  const out = [];
+  secs.forEach(sec => {
+    if (opt.cover) pdfCoverPages(sec, paper, opt).forEach(pg => out.push({ pg, name: sec.lst.name }));
+    sec.built.forEach(b => b.pages.forEach(pg => out.push({ pg, name: sec.lst.name })));
+  });
+  const pages = out.map((o, i) => {                           // footer: list name on the left, page number on the right
+    const ops = o.pg.ops.slice();
+    ops.push(pdfOp('F4', 8.5, PDF.mx, paper.h - PDF.bottom + 20, paper.h, pdfPlain(o.name)));
+    const num = String(i + 1); ops.push(pdfOp('F4', 8.5, paper.w - PDF.mx - num.length * 4.8, paper.h - PDF.bottom + 20, paper.h, num));
+    return { w: paper.w, h: paper.h, ops };
+  });
+  return { bytes: buildPDF(pages, lists.length === 1 ? lists[0].name : lists.length + ' sets'), pages: pages.length, songs: secs.reduce((a, s) => a + s.songs.length, 0) };
+}
+
+const PDF_DEFAULTS = { paper: /^en-(US|CA)|^es-MX/.test(navigator.language || '') ? 'letter' : 'a4', fit: true, size: 11, cover: true, chords: true, join: false };
+function pdfOptions() { try { return { ...PDF_DEFAULTS, ...JSON.parse(localStorage.getItem('sv.pdfopt') || '{}') }; } catch (e) { return { ...PDF_DEFAULTS }; } }
+function printLists(lists) {                                  // lists: [{ name, ids }]
+  const real = lists.filter(l => l && l.ids.some(songById));
+  if (!real.length) { toast('Nothing to print'); return; }
+  const opt = pdfOptions();
+  dialog((box, close) => {
+    box.appendChild(mk('h3', '', 'Make a PDF'));
+    box.appendChild(mk('p', 'info', real.map(l => '“' + l.name + '” (' + l.ids.filter(songById).length + ' songs)').join(', ') + '. Each song starts on its own page, in the key you have it set to.'));
+    const sel = document.createElement('select'); sel.add(new Option('Paper: A4', 'a4')); sel.add(new Option('Paper: Letter', 'letter')); sel.value = opt.paper; box.appendChild(sel);
+    const check = (label, key) => { const l = mk('label', 'pdfopt'), c = document.createElement('input'); c.type = 'checkbox'; c.checked = !!opt[key]; c.onchange = () => { opt[key] = c.checked; }; l.append(c, mk('span', '', label)); box.appendChild(l); };
+    check('Fit each song to one page', 'fit'); check('Include a set list page', 'cover'); check('Show chords', 'chords'); check('Join short lines (saves space)', 'join');
+    const row = mk('div', 'row');
+    row.append(btn('Cancel', () => close(null)), btn('Make PDF', () => close(true), 'primary')); box.appendChild(row);
+    box.dataset.ok = '1'; sel.onchange = () => { opt.paper = sel.value; };
+  }).then(async ok => {
+    if (!ok) return;
+    try { localStorage.setItem('sv.pdfopt', JSON.stringify(opt)); } catch (e) {}
+    const r = buildListsPDF(real, opt);
+    const base = (real.length === 1 ? real[0].name : real.length + ' sets').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 60) || 'songs';
+    if (await shareFile(base + '.pdf', r.bytes, 'application/pdf')) toast('PDF ready · ' + r.pages + ' page' + (r.pages === 1 ? '' : 's'));
+  });
+}
 
 /* ---------- UI wiring ---------- */
 let joinMode = true, wrapOn = true;
