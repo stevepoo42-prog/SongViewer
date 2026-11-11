@@ -2,9 +2,9 @@
 // The app shell is cached on first load. After that every request tries the network first, but only for
 // TIMEOUT ms: on a slow, flaky or internet-less Wi-Fi the saved copy is used instead, so the app always
 // opens quickly. If the network answers later, the saved copy is refreshed in the background.
-const CACHE = 'songviewer-v3';
+const CACHE = 'songviewer-v4';
 const TIMEOUT = 2500;
-const SHELL = ['./', './index.html', './preview.html', './manifest.json'];
+const SHELL = ['./', './index.html', './preview.html', './manifest.json', './vendor/qrcode.min.js', './vendor/jsQR.js'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));

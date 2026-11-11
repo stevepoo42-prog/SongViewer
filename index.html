@@ -120,6 +120,15 @@
   .dbox .row > * { flex:1; }
   #drop { position:fixed; inset:0; z-index:80; display:none; align-items:center; justify-content:center; text-align:center; padding:30px;
     background:rgba(10,132,255,.28); border:4px dashed #0a84ff; font-size:26px; font-weight:700; pointer-events:none; }
+  .qrov { position:fixed; inset:0; z-index:90; background:#111; color:#fff; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:12px; padding:14px; text-align:center; }
+  .qrov[hidden] { display:none; }
+  .qrov h2 { margin:0; font-size:22px; } .qrov .sub { color:#a8a8ae; font-size:15px; max-width:640px; line-height:1.35; white-space:pre-line; }
+  #qrCanvas { background:#fff; border-radius:12px; image-rendering:pixelated; }
+  #rcvVideo { width:min(92vw,640px); max-height:56vh; background:#000; border-radius:14px; object-fit:cover; }
+  .qrov .row { justify-content:center; flex-wrap:wrap; } .qrov .row > * { flex:none; }
+  .bar { width:min(86vw,560px); height:14px; background:#333; border-radius:7px; overflow:hidden; }
+  .bar > i { display:block; height:100%; width:0; background:#30d158; transition:width .15s; }
   #toast { position:fixed; left:50%; bottom:90px; transform:translateX(-50%); background:#3a3a3c; color:#fff; padding:10px 18px; border-radius:20px; z-index:70; display:none; max-width:90vw; }
   .info { color:var(--muted); font-size:14px; line-height:1.4; }
 </style>
@@ -144,6 +153,22 @@
   <div id="libSub"></div>
   <div id="libBody"></div>
   <div id="libActions"></div>
+</div>
+<div id="qrBox" class="qrov" hidden>
+  <h2 id="qrTitle">Broadcasting</h2>
+  <canvas id="qrCanvas"></canvas>
+  <div class="sub" id="qrInfo"></div>
+  <div class="row">
+    <button id="qrSlow">Slower</button><button id="qrFast">Faster</button>
+    <button id="qrSize">Frame size: Medium</button><button id="qrStop" class="primary">Stop</button>
+  </div>
+</div>
+<div id="rcvBox" class="qrov" hidden>
+  <h2>Receive sets</h2>
+  <video id="rcvVideo" playsinline muted autoplay></video>
+  <div class="bar"><i id="rcvBar"></i></div>
+  <div class="sub" id="rcvInfo">Point the camera at the other iPad's screen while it is broadcasting.</div>
+  <div class="row"><button id="rcvCancel" class="primary">Cancel</button></div>
 </div>
 <div id="toast"></div>
 <div id="drop">Drop song files or a folder here<br><span style="font-size:15px;font-weight:400">.txt songs are added to Songs · a SongViewer backup (.json) can be imported</span></div>
@@ -870,13 +895,14 @@ function renderActions() {
     const t = lib.tab === 'books' ? 'book' : 'set';
     bar.appendChild(btn('＋ New ' + t, () => newList(t), 'primary'));
     if (t === 'set') {
-      const sh = btn('Share via AirDrop…', () => shareSets([...lib.selSets])); sh.disabled = lib.selSets.size === 0; bar.appendChild(sh);
+      const sh = btn('Share via AirDrop…', () => shareSets([...lib.selSets])), bc = btn('Broadcast (QR)…', () => startBroadcast([...lib.selSets]));
+      sh.disabled = bc.disabled = lib.selSets.size === 0; bar.append(sh, bc, btn('Receive (QR)…', startReceive));
       if (lib.selSets.size) bar.appendChild(mk('span', 'info', lib.selSets.size + ' selected'));
     }
     return;
   } else {
     bar.appendChild(btn('＋ Add songs…', addSongsToView, 'primary'));
-    if (lib.view.type === 'set') bar.appendChild(btn('Share via AirDrop…', () => shareSets([lib.view.id])));
+    if (lib.view.type === 'set') bar.append(btn('Share via AirDrop…', () => shareSets([lib.view.id])), btn('Broadcast (QR)…', () => startBroadcast([lib.view.id])));
     if (lib.view.type === 'book') bar.appendChild(dis(btn('Add to Set…', () => addToList('set', ids))));
     bar.appendChild(dis(btn('Remove from ' + lib.view.type, () => removeFromList(ids), 'danger')));
   }
@@ -900,7 +926,8 @@ function backupDialog() {
       '\nIn the app now: ' + library.length + ' songs, ' + books.length + ' books, ' + sets.length + ' sets'));
     box.appendChild(btn('Export backup…', () => { close(); exportBackup(); }, 'primary'));
     box.appendChild(btn('Import backup…', () => { close(); $('importFile').click(); }));
-    box.appendChild(mk('p', 'info', 'Backups: save the file to iCloud Drive. To send sets to another iPad, use Library ▸ Sets, tick the sets and choose Share via AirDrop; on the other iPad save the file, then Import it here.'));
+    box.appendChild(btn('Receive sets from another iPad (camera)…', () => { close(); startReceive(); }));
+    box.appendChild(mk('p', 'info', 'Backups: save the file to iCloud Drive. To send sets to another iPad: Library ▸ Sets ▸ tick them ▸ Share via AirDrop, or Broadcast (QR) and have the other iPad Receive. QR needs no Wi-Fi.'));
     box.appendChild(btn('Close', () => close()));
   });
 }
@@ -1012,6 +1039,9 @@ async function importBackupFile(f) {
   let b;
   try { b = JSON.parse(await f.text()); } catch (e) { toast('That file isn’t a SongViewer backup'); return; }
   if (!b || b.app !== 'SongViewer' || !Array.isArray(b.library)) { toast('That file isn’t a SongViewer backup'); return; }
+  await handleBackupObject(b);
+}
+async function handleBackupObject(b) {                    // a backup or shared sets, whether it arrived as a file or by QR
   const n = b.library.filter(validSong).length;
   if (b.kind === 'sets') {                                  // sets shared from another iPad
     const nm = (b.sets || []).map(x => x.name).join(', ');
@@ -1132,7 +1162,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v14 · 11 Nov 14:46';   // bump on every commit
+const APP_VERSION = 'v15 · 11 Nov 15:00';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
@@ -1235,6 +1265,147 @@ if (isDesktop()) {
   $('folderIn').addEventListener('change', async e => { const fs = [...e.target.files]; e.target.value = ''; await handleFiles(fs); });
   if (!EMBEDDED) { $('previewIpad').hidden = false; $('previewIpad').onclick = () => { try { localStorage.setItem('sv.frame', 'on'); } catch (e) {} location.href = 'preview.html'; }; }
 }
+
+/* ---------- QR broadcast: show sets as a looping QR code, receive them with the camera ---------- */
+// The sets are compressed and cut into small pieces. Each piece is one QR code and the codes are shown in a loop,
+// so a receiver can start at any moment and simply collects pieces until it has them all. No network is involved.
+const QR = { open: false, payload: null, frames: [], idx: 0, timer: 0, fps: 4, size: 'S', sid: '' };
+const QR_CHUNK = { S: 300, M: 450, L: 650 };                 // bytes of data per code: smaller = easier to scan, more codes
+const QR_SIZE_NAME = { S: 'Small', M: 'Medium', L: 'Large' };
+const loadedScripts = {};
+function loadScript(src) {
+  return loadedScripts[src] || (loadedScripts[src] = new Promise((res, rej) => {
+    const el = document.createElement('script'); el.src = src; el.onload = res; el.onerror = () => rej(new Error('could not load ' + src));
+    document.head.appendChild(el);
+  }));
+}
+const b64 = u8 => { let t = ''; for (let i = 0; i < u8.length; i += 0x8000) t += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(t); };
+const unb64 = t => Uint8Array.from(atob(t), c => c.charCodeAt(0));
+const CRC_T = (() => { const t = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(u8) { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC_T[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+const crcHex = u8 => crc32(u8).toString(16).padStart(8, '0');
+async function pipeBytes(u8, stream) { const w = stream.writable.getWriter(); w.write(u8); w.close(); return new Uint8Array(await new Response(stream.readable).arrayBuffer()); }
+const gz = u8 => pipeBytes(u8, new CompressionStream('gzip')), gunzip = u8 => pipeBytes(u8, new DecompressionStream('gzip'));
+
+async function buildFrames(obj, chunk) {
+  const raw = new TextEncoder().encode(JSON.stringify(obj));
+  let data = raw, flag = 'r';
+  if (typeof CompressionStream === 'function') { try { data = await gz(raw); flag = 'z'; } catch (e) { data = raw; } }
+  const sid = Array.from({ length: 4 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
+  const crc = crcHex(data), n = Math.max(1, Math.ceil(data.length / chunk)), frames = [];
+  for (let i = 0; i < n; i++) frames.push('SV1.' + sid + '.' + (i + 1) + '.' + n + '.' + flag + crc + '.' + b64(data.subarray(i * chunk, (i + 1) * chunk)));
+  return { sid, frames, rawBytes: raw.length, sentBytes: data.length };
+}
+function drawQR(canvas, text, target) {
+  const q = qrcode(0, 'L'); q.addData(text, 'Byte'); q.make();
+  const n = q.getModuleCount(), quiet = 4, cells = n + quiet * 2, px = Math.max(2, Math.floor(target / cells));
+  canvas.width = canvas.height = cells * px; canvas.style.width = canvas.style.height = cells * px + 'px';
+  const g = canvas.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, canvas.width, canvas.height); g.fillStyle = '#000';
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) g.fillRect((c + quiet) * px, (r + quiet) * px, px, px);
+}
+
+/* --- broadcasting --- */
+function qrTarget() { return Math.floor(Math.min(window.innerWidth * 0.9, window.innerHeight * 0.58)); }
+function qrInfoText() {
+  const p = QR.payload, secs = Math.round(QR.frames.length / QR.fps);
+  const names = p.sets.map(x => '“' + x.name + '”').join(', ');
+  return names + ' · ' + p.library.length + ' song' + (p.library.length === 1 ? '' : 's') + ' · ' + QR.frames.length + ' codes, about ' + secs + ' s per round'
+    + (QR.frames.length > 120 ? '  ·  That is a lot to scan: broadcast fewer sets, or use AirDrop.' : '')
+    + '\nOn the other iPad: Library ▸ Sets ▸ Receive (QR), then hold it steady in front of this screen. Turn the brightness up. If it struggles, keep frames Small; Large is faster but harder to read.';
+}
+async function rebuildBroadcast() {
+  const b = await buildFrames(QR.payload, QR_CHUNK[QR.size]);
+  QR.frames = b.frames; QR.sid = b.sid; QR.idx = 0;
+  $('qrSize').textContent = 'Frame size: ' + QR_SIZE_NAME[QR.size];
+  $('qrInfo').textContent = qrInfoText();
+}
+function tickQR() {
+  if (!QR.frames.length) return;
+  const i = QR.idx % QR.frames.length; QR.idx++;
+  drawQR($('qrCanvas'), QR.frames[i], qrTarget());
+  $('qrTitle').textContent = 'Broadcasting · code ' + (i + 1) + ' of ' + QR.frames.length;
+}
+function restartQRTimer() { clearInterval(QR.timer); QR.timer = setInterval(tickQR, Math.round(1000 / QR.fps)); }
+async function startBroadcast(setIds) {
+  const payload = makeSetsShare(setIds);
+  if (!payload.sets.length) { toast('Tick a set to broadcast'); return; }
+  try { await loadScript('vendor/qrcode.min.js'); } catch (e) { toast('Could not load the QR code maker'); return; }
+  QR.payload = payload; QR.open = true; $('qrBox').hidden = false;
+  await rebuildBroadcast(); tickQR(); restartQRTimer();
+}
+function stopBroadcast() { clearInterval(QR.timer); QR.open = false; $('qrBox').hidden = true; }
+$('qrStop').onclick = stopBroadcast;
+$('qrSlow').onclick = () => { QR.fps = Math.max(1, QR.fps - 1); restartQRTimer(); $('qrInfo').textContent = qrInfoText(); };
+$('qrFast').onclick = () => { QR.fps = Math.min(8, QR.fps + 1); restartQRTimer(); $('qrInfo').textContent = qrInfoText(); };
+$('qrSize').onclick = async () => { QR.size = { S: 'M', M: 'L', L: 'S' }[QR.size]; await rebuildBroadcast(); tickQR(); };
+
+/* --- receiving --- */
+const RCV = { running: false, stream: null, sid: '', total: 0, flag: '', crc: '', got: new Map(), other: 0, cv: null };
+const FRAME_RE = /^SV1\.([A-Z2-9]{4})\.(\d+)\.(\d+)\.([zr])([0-9a-f]{8})\.([A-Za-z0-9+/=]*)$/;
+function resetCollector() { Object.assign(RCV, { sid: '', total: 0, flag: '', crc: '', got: new Map(), other: 0 }); updateRcvUI(); }
+function updateRcvUI() {
+  const n = RCV.got.size, t = RCV.total;
+  $('rcvBar').style.width = t ? Math.round(100 * n / t) + '%' : '0';
+  $('rcvInfo').textContent = t ? 'Collected ' + n + ' of ' + t + ' codes. Keep the camera on the screen.' : 'Point the camera at the other iPad’s screen while it is broadcasting.';
+}
+function onFrame(text) {                                   // one decoded QR code
+  const m = FRAME_RE.exec(text); if (!m) return false;
+  const sid = m[1], idx = +m[2], total = +m[3];
+  if (sid !== RCV.sid) {
+    if (RCV.sid && RCV.got.size && ++RCV.other < 3) return false;   // a stray code from another broadcast: wait for it to repeat
+    Object.assign(RCV, { sid, total, flag: m[4], crc: m[5], got: new Map(), other: 0 });
+  } else RCV.other = 0;
+  if (total !== RCV.total || idx < 1 || idx > total) return false;
+  if (!RCV.got.has(idx)) { RCV.got.set(idx, m[6]); updateRcvUI(); }
+  if (RCV.got.size === RCV.total) finishReceive();
+  return true;
+}
+async function finishReceive() {
+  RCV.running = false;
+  const parts = []; for (let i = 1; i <= RCV.total; i++) parts.push(unb64(RCV.got.get(i)));
+  const all = new Uint8Array(parts.reduce((a, x) => a + x.length, 0)); let o = 0; parts.forEach(x => { all.set(x, o); o += x.length; });
+  let obj = null;
+  if (crcHex(all) === RCV.crc) {
+    try { obj = JSON.parse(new TextDecoder().decode(RCV.flag === 'z' ? await gunzip(all) : all)); } catch (e) { obj = null; }
+  }
+  if (!obj || obj.app !== 'SongViewer' || !Array.isArray(obj.library)) {          // a misread code: start the round again
+    toast('A code was misread. Collecting again…'); resetCollector(); RCV.running = true; scanLoop(); return;
+  }
+  stopReceive(); await handleBackupObject(obj);
+}
+function scanLoop() {
+  if (!RCV.running) return;
+  const v = $('rcvVideo');
+  if (v.videoWidth) {
+    const w = Math.min(v.videoWidth, 960), h = Math.round(v.videoHeight * w / v.videoWidth);
+    RCV.cv = RCV.cv || document.createElement('canvas'); RCV.cv.width = w; RCV.cv.height = h;
+    const g = RCV.cv.getContext('2d', { willReadFrequently: true }); g.drawImage(v, 0, 0, w, h);
+    const code = jsQR(g.getImageData(0, 0, w, h).data, w, h, { inversionAttempts: 'dontInvert' });
+    if (code && code.data) onFrame(code.data);
+  }
+  if (RCV.running) setTimeout(scanLoop, 50);
+}
+async function startReceive() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast('This browser can’t use the camera'); return; }
+  try { await loadScript('vendor/jsQR.js'); } catch (e) { toast('Could not load the QR reader'); return; }
+  resetCollector(); $('rcvBox').hidden = false;
+  try {
+    RCV.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    const v = $('rcvVideo'); v.srcObject = RCV.stream; await v.play();
+  } catch (e) {
+    stopReceive();
+    toast(e && e.name === 'NotAllowedError' ? 'Camera access is off. Allow it for SongViewer in the iPad’s Settings, then try again' : 'Could not start the camera');
+    return;
+  }
+  RCV.running = true; scanLoop();
+}
+function stopReceive() {
+  RCV.running = false;
+  if (RCV.stream) { RCV.stream.getTracks().forEach(t => t.stop()); RCV.stream = null; }
+  $('rcvVideo').srcObject = null; $('rcvBox').hidden = true;
+}
+$('rcvCancel').onclick = stopReceive;
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && RCV.running) stopReceive(); });   // never leave the camera on
 
 /* ---------- UI wiring ---------- */
 let joinMode = true, wrapOn = true;
@@ -1381,6 +1552,7 @@ $('file').addEventListener('change', async e => { await addFiles([...e.target.fi
 document.addEventListener('keydown', e => {
   const ae = document.activeElement || {};
   if (/^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && ae.type !== 'checkbox') return;
+  if (!$('qrBox').hidden || !$('rcvBox').hidden) { if (e.key === 'Escape') { stopBroadcast(); stopReceive(); } return; }
   if (lib.open) { if (e.key === 'Escape') closeLib(); return; }
   if (document.body.classList.contains('open')) { if (e.key === 'Escape') closePanel(); return; }
   if (ae.tagName === 'BUTTON' && ae.blur) ae.blur();           // so Space/Enter never click a leftover button
