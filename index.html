@@ -256,6 +256,7 @@ function transposeChord(tok, shift, flats) {
 }
 
 /* ---------- Parsing ---------- */
+const SECTION_LEAD_RE = /^\s*((?:intro|verse|chorus|pre[- ]?chorus|bridge|outro|tag|instrumental|solo|interlude|refrain|ending|turnaround|coda|vamp|break|link)(?![a-z])\s*\d*)\s*(?::\s*(\S.*)|(?=\[)(\S.*))$/i;
 const SECTION_RE = /^\s*[\[(]?\s*(intro|verse|chorus|pre[- ]?chorus|bridge|outro|tag|instrumental|solo|interlude|refrain|ending|turnaround|coda|vamp|break|link)(?![a-z])[^\]\)]*[\])]?\s*:?\s*$/i;
 const KEYLINE_RE = /^\s*(?:key\s*(?:of)?\s*[:\-]?\s*)([A-G][#b]?)(m(?!aj)(?:in)?)?\s*$/i;
 
@@ -340,7 +341,7 @@ function parseSong(name, text) {
   };
 
   for (let i = 0; i < raw.length; i++) {
-    const line = raw[i];
+    let line = raw[i];
     const d = /^\s*\{\s*(\w+)\s*:?\s*(.*?)\s*\}\s*$/.exec(line);
     if (d) { directive(d[1].toLowerCase(), d[2]); continue; }
     if (env && env.verbatim) { song.lines.push(line.trim() ? { t: 'verb', s: line.replace(/\s+$/, '') } : { t: 'blank' }); continue; }   // tab / grid blocks are shown as written
@@ -352,6 +353,12 @@ function parseSong(name, text) {
     if (!line.trim()) { song.lines.push({ t: 'blank' }); continue; }
     const cp = /^\s*capo\s*(?:on\s*)?(.*?)[\s*]*$/i.exec(line);
     if (cp && !song.capo) { song.capo = ('Capo ' + cp[1]).trim(); continue; }
+
+    const sl = SECTION_LEAD_RE.exec(line);                   // "Outro: [D], [D]" / "Outro [A]": label, then the music on the same line
+    if (sl && !SECTION_RE.test(line)) {
+      song.lines.push({ t: 'section', s: sl[1].replace(/([a-z])(\d)/i, '$1 $2').trim() });
+      line = sl[2] || sl[3];
+    }
 
     const tr = splitTrail(line);
     if (tr && !isChordLine(line)) { song.lines.push({ t: 'trail', lead: tr.lead, cl: tr.cl }); continue; }
@@ -1262,7 +1269,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v19 · 11 Nov 20:20';   // bump on every commit
+const APP_VERSION = 'v20 · 11 Nov 20:23';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
