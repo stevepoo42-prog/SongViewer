@@ -54,8 +54,8 @@
   .edge { position:fixed; bottom:0; top:calc(env(safe-area-inset-top) + 56px); width:14vw; max-width:180px; z-index:15; }
   #edgeL { left:0; } #edgeR { right:0; }
   .edge.flash { background:rgba(255,255,255,.10); }
-  #pull { position:fixed; top:0; left:0; right:0; height:calc(env(safe-area-inset-top) + 56px); z-index:22; touch-action:none;
-    display:flex; justify-content:center; align-items:flex-start; padding-top:calc(env(safe-area-inset-top) + 8px); cursor:grab; }
+  #pull { position:fixed; top:0; left:0; right:0; height:calc(env(safe-area-inset-top) + 56px); z-index:22; touch-action:manipulation;
+    display:flex; justify-content:center; align-items:flex-start; padding-top:calc(env(safe-area-inset-top) + 8px); cursor:pointer; }
   .pill { width:56px; height:6px; border-radius:3px; background:#6b6b70; }
   #pull .pill { background:#fff; opacity:.28; }
   #scrim { position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:30; opacity:0; pointer-events:none; transition:opacity .24s ease; touch-action:none; }
@@ -136,7 +136,7 @@
 <div class="edge" id="edgeL" aria-label="Previous song"></div>
 <div class="edge" id="edgeR" aria-label="Next song"></div>
 <div id="ver"></div>
-<div id="pull" aria-label="Pull down for controls"><span class="pill"></span></div>
+<div id="pull" aria-label="Tap for controls"><span class="pill"></span></div>
 <div id="scrim"></div>
 
 <aside id="panel">
@@ -968,8 +968,23 @@ function endDrag(e) {
   else open = !(d.y < h * 0.7 || v < -0.5);
   settle(open);
 }
+(() => {                                    // swipe up anywhere on the sheet to close (never fights scrolling or the sliders)
+  const pb = $('panelBody'); let sw = null;
+  pb.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) { sw = null; return; }
+    const t = e.touches[0];
+    sw = { x: t.clientX, y: t.clientY, slider: e.target.type === 'range', atEnd: pb.scrollTop + pb.clientHeight >= pb.scrollHeight - 2 };
+  }, { passive: true });
+  pb.addEventListener('touchend', e => {
+    if (!sw) return;
+    const t = e.changedTouches[0], dy = t.clientY - sw.y, dx = t.clientX - sw.x, w = sw; sw = null;
+    if (!w.slider && w.atEnd && dy < -60 && Math.abs(dy) > 1.5 * Math.abs(dx)) closePanel();
+  }, { passive: true });
+  pb.addEventListener('touchcancel', () => { sw = null; }, { passive: true });
+})();
 function cancelDrag() { if (!drag) return; const was = document.body.classList.contains('open'); drag = null; settle(was); }
-[['pull', true], ['scrim', false], ['sheetHandle', false]].forEach(([id, opening]) => {
+$('pull').addEventListener('click', openPanel);                       // tap near the top opens the controls
+[['scrim', false], ['sheetHandle', false]].forEach(([id, opening]) => {
   const el = $(id);
   el.addEventListener('pointerdown', e => beginDrag(e, opening));
   el.addEventListener('pointermove', moveDrag);
@@ -978,7 +993,7 @@ function cancelDrag() { if (!drag) return; const was = document.body.classList.c
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v8 · 11 Nov 13:39';   // bump on every commit
+const APP_VERSION = 'v9 · 11 Nov 13:42';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
@@ -1197,7 +1212,7 @@ async function initApp() {
   try { const t = localStorage.getItem('sv.tab'); if (t === 'songs' || t === 'books' || t === 'sets') lib.tab = t; } catch (e) {}
   if (localStorage.getItem('sv.wake') === '1') setWake(true); else wakeLabel();
   edgeOn = localStorage.getItem('sv.edge') !== '0'; applyEdge(); scrollLabel();
-  try { if (!localStorage.getItem('sv.hint1')) { localStorage.setItem('sv.hint1', '1'); setTimeout(() => toast('Pull down from the top for controls; slide it back up to return'), 600); } } catch (e) {}
+  try { if (!localStorage.getItem('sv.hint2')) { localStorage.setItem('sv.hint2', '1'); setTimeout(() => toast('Tap near the top for controls; swipe up to close them'), 600); } } catch (e) {}
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});   // ask iOS/Chrome not to evict saved songs & settings
   if (curId && library.some(s => s.id === curId)) selectSong(curId); else if (library[0]) selectSong(library[0].id); else { applyPrefs(); render(); }
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
