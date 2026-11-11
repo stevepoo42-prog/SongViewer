@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Songs">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.json">
+<title>Song Viewer</title>
+<style>
+  :root {
+    --bg:#000; --fg:#f2f2f2; --chord:#ffd24a; --section:#6cc4ff; --muted:#8a8a8e;
+    --panel:#1c1c1e; --btn:#2c2c2e; --accent:#0a84ff;
+    --fs:26px; --lh:1.0;
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font-family:-apple-system,system-ui,sans-serif; }
+  #song { padding:calc(env(safe-area-inset-top) + 8px) 24px 30vh 24px; margin:0;
+    -webkit-user-select:none; user-select:none; }
+  #song h1 { font-size:calc(var(--fs) * 1.2); margin:0; line-height:1.1; }
+  #song .meta { color:var(--muted); font-size:calc(var(--fs) * .65); margin-bottom:.3em; line-height:1.1; }
+  .line { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:var(--fs); line-height:var(--lh);
+    white-space:pre; overflow-wrap:normal; }
+  .line.chords { color:var(--chord); font-weight:700; }
+  .row2 { margin-top:.3em; }
+  .line.section + .row2, .line.blank + .row2 { margin-top:0; }
+  .sec-intro { color:#b794ff; } .sec-verse { color:#6cc4ff; } .sec-chorus { color:#5ee07a; }
+  .sec-bridge { color:#ff7ad9; } .sec-solo { color:#4fe3d5; } .sec-outro { color:#ff8a7a; }
+  .line.section.sec-intro { color:#b794ff; } .line.section.sec-verse { color:#6cc4ff; } .line.section.sec-chorus { color:#5ee07a; }
+  .line.section.sec-bridge { color:#ff7ad9; } .line.section.sec-solo { color:#4fe3d5; } .line.section.sec-outro { color:#ff8a7a; }
+  .line.blank { height:calc(var(--lh) * .35em); }
+  .line.section { color:var(--section); font-weight:700; margin-top:.25em; line-height:var(--lh); text-transform:uppercase;
+    font-size:calc(var(--fs) * .8); letter-spacing:.05em; }
+  .line.inline { white-space:normal; line-height:var(--lh); margin:0; font-family:-apple-system,system-ui,sans-serif; }
+  .seg { display:inline-flex; flex-direction:column; vertical-align:bottom; white-space:pre; }
+  .seg .c { color:var(--chord); font-weight:700; min-height:var(--lh); padding-right:.4em; }
+  .seg .l { min-height:var(--lh); }
+  body.nochords .line.chords, body.nochords .seg .c { display:none; }
+  
+
+  body.fit #song { padding-bottom:8px; }
+  #empty { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:16px; color:var(--muted); text-align:center; padding:24px; }
+  #empty button { font-size:20px; }
+
+  /* Invisible tap zone in the top-right corner + small hint icon */
+  #hot { position:fixed; top:0; right:0; width:22vw; max-width:220px; height:18vh; max-height:160px; z-index:20; }
+  #gear { position:fixed; top:calc(env(safe-area-inset-top) + 10px); right:14px; z-index:21; font-size:22px;
+    opacity:.25; pointer-events:none; }
+
+  #scrim { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:30; display:none; }
+  #panel { position:fixed; top:0; right:0; bottom:0; width:min(420px,92vw); background:var(--panel); z-index:31;
+    transform:translateX(100%); transition:transform .22s ease; overflow-y:auto;
+    padding:calc(env(safe-area-inset-top) + 16px) 18px 28px; }
+  body.open #panel { transform:none; } body.open #scrim { display:block; }
+  #panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:22px 0 8px; }
+  #panel h2:first-child { margin-top:0; }
+  button { font:inherit; color:var(--fg); background:var(--btn); border:0; border-radius:10px; padding:12px 14px; }
+  button:active { filter:brightness(1.4); }
+  button.primary { background:var(--accent); }
+  #keys { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  #keys button { font-size:20px; font-weight:600; padding:14px 0; }
+  #keys button.sel { background:var(--accent); }
+  #keys button.orig { outline:2px solid var(--chord); outline-offset:-2px; }
+  .row { display:flex; gap:8px; align-items:center; }
+  .row > * { flex:1; }
+  .row label { flex:none; }
+  input[type=range] { width:100%; }
+  #list { display:flex; flex-direction:column; gap:6px; }
+  .item { display:flex; gap:6px; }
+  .item .name { flex:1; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .item .name.cur { background:var(--accent); }
+  .item .del { flex:none; width:44px; color:#ff6b6b; }
+  .info { color:var(--muted); font-size:14px; line-height:1.4; }
+</style>
+</head>
+<body>
+<div id="song"></div>
+<div id="empty">
+  <div style="font-size:28px;color:var(--fg)">No song loaded</div>
+  <div>Open text files made with ChordClean</div>
+  <button class="primary" id="openBtn0">Open song files…</button>
+</div>
+
+<div id="hot" aria-label="Open controls"></div>
+<div id="gear">⚙︎</div>
+<div id="scrim"></div>
+
+<aside id="panel">
+  <h2>Key <span id="keyInfo" style="text-transform:none;letter-spacing:0"></span></h2>
+  <div id="keys"></div>
+  <div class="row" style="margin-top:8px">
+    <button id="down">− ½ step</button>
+    <button id="reset">Original key</button>
+    <button id="up">+ ½ step</button>
+  </div>
+
+  <h2>Display</h2>
+  <div class="row"><label>Size</label><input id="size" type="range" min="10" max="64" value="26"></div>
+  <div class="row" style="margin-top:10px"><button id="toggleJoin" class="primary">Join short lines: on</button></div>
+  <div class="row" style="margin-top:10px"><button id="toggleFit">Auto-fit to screen: off</button></div>
+  <div class="row" style="margin-top:10px"><label>Spacing</label><input id="lh" type="range" min="0.85" max="1.4" step="0.05" value="1"></div>
+  <div class="row" style="margin-top:10px">
+    <button id="toggleChords">Hide chords</button>
+    <button id="toggleWake">Screen: normal</button>
+  </div>
+
+  <h2>Songs</h2>
+  <div class="row" style="margin-bottom:8px"><button class="primary" id="openBtn">Add song files…</button></div>
+  <div id="list"></div>
+  <p class="info" id="hint"></p>
+</aside>
+
+<input id="file" type="file" accept=".txt,.text,.cho,.crd,.chopro,.pro,.onsong,text/plain" multiple hidden>
+
+<script>
+'use strict';
+/* ---------- Music theory ---------- */
+const SHARP = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const FLAT  = ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'];
+const KEY_MAJ = ['C','Db','D','Eb','E','F','F#','G','Ab','A','Bb','B'];
+const KEY_MIN = ['Cm','C#m','Dm','Ebm','Em','Fm','F#m','Gm','G#m','Am','Bbm','Bm'];
+const FLAT_MAJORS = new Set([1,3,5,8,10]);
+
+const CHORD_RE = /^([A-G])([#b]?)((?:maj|min|mi|m|M|dim|aug|sus|add|alt|ø|°|\+|-|\d|#|b|\(|\)|,)*)(?:\/([A-G])([#b]?))?$/;
+const noteIndex = (l, acc) => (SHARP.indexOf(l) + (acc === '#' ? 1 : acc === 'b' ? -1 : 0) + 12) % 12;
+
+function transposeChord(tok, shift, flats) {
+  const stars = /\*+$/.exec(tok); if (stars) tok = tok.slice(0, -stars[0].length);
+  const m = CHORD_RE.exec(tok);
+  if (!m) return tok + (stars ? stars[0] : '');
+  const names = flats ? FLAT : SHARP;
+  let out = names[(noteIndex(m[1], m[2]) + shift) % 12] + m[3];
+  if (m[4]) out += '/' + names[(noteIndex(m[4], m[5]) + shift) % 12];
+  return out + (stars ? stars[0] : '');
+}
+
+/* ---------- Parsing ---------- */
+const SECTION_RE = /^\s*[\[(]?\s*(intro|verse|chorus|pre[- ]?chorus|bridge|outro|tag|instrumental|solo|interlude|refrain|ending|turnaround|coda|vamp|break)(?![a-z])[^\]\)]*[\])]?\s*:?\s*$/i;
+const KEYLINE_RE = /^\s*(?:key\s*(?:of)?\s*[:\-]?\s*)([A-G][#b]?)(m(?!aj)(?:in)?)?\s*$/i;
+
+function isChordLine(line) {
+  const toks = line.replace(/[\[\]]/g, ' ').trim().split(/\s+/).filter(Boolean);
+  if (!toks.length) return false;
+  let chords = 0;
+  for (const t of toks) {
+    const base = t.replace(/\*+$/, '');
+    if (base && CHORD_RE.test(base)) chords++;
+    else if (!/^(\||\/|-|x\d+|\d+x|N\.?C\.?|%|\(|\)|\*+)+$/i.test(t)) return false;
+  }
+  return chords > 0;
+}
+
+function parseSong(name, text) {
+  const raw = text.replace(/\r\n?/g, '\n').replace(/\t/g, '    ').split('\n');
+  const song = { name, title: name.replace(/\.[^.]+$/, ''), artist: '', key: null, minor: false, lines: [] };
+  let sawTitle = false, titleIdx = -1;
+
+  for (let i = 0; i < raw.length; i++) {
+    const line = raw[i];
+    // ChordPro directives
+    let d = /^\s*\{\s*(\w+)\s*:?\s*(.*?)\s*\}\s*$/.exec(line);
+    if (d) {
+      const k = d[1].toLowerCase(), v = d[2];
+      if (k === 'title' || k === 't') { song.title = v; sawTitle = true; }
+      else if (k === 'artist' || k === 'subtitle' || k === 'st') song.artist = v;
+      else if (k === 'key') setKey(song, v);
+      else if (/^(soc|start_of_chorus)$/.test(k)) song.lines.push({ t: 'section', s: 'Chorus' });
+      else if (/^(sov|start_of_verse)$/.test(k)) song.lines.push({ t: 'section', s: 'Verse' });
+      else if (/^(sob|start_of_bridge)$/.test(k)) song.lines.push({ t: 'section', s: 'Bridge' });
+      continue;
+    }
+    const kl = KEYLINE_RE.exec(line);
+    if (kl && !song.key) { setKey(song, kl[1] + (kl[2] ? 'm' : '')); continue; }
+    if (kl) continue;
+
+    if (!line.trim()) { song.lines.push({ t: 'blank' }); continue; }
+    const cp = /^\s*capo\s*(?:on\s*)?(.*?)[\s*]*$/i.exec(line);
+    if (cp && !song.capo) { song.capo = ('Capo ' + cp[1]).trim(); continue; }
+
+    if (SECTION_RE.test(line)) { song.lines.push({ t: 'section', s: line.replace(/[\[\]():]/g, '').trim().replace(/([a-z])(\d)/i, '$1 $2') }); continue; }
+
+    if (isChordLine(line)) { song.lines.push({ t: 'chords', s: line.replace(/\[([^\]]*)\]/g, (m, c) => c + '  ').replace(/\s+$/, '') }); continue; }
+
+    if (/\[[^\]]+\]/.test(line) && /\[[A-G][^\]]*\]/.test(line)) {
+      const segs = [];
+      line.split(/(\[[^\]]+\])/).forEach(p => {
+        if (/^\[[^\]]+\]$/.test(p) && CHORD_RE.test(p.slice(1, -1))) segs.push({ c: p.slice(1, -1), l: '' });
+        else if (p) { if (!segs.length || segs[segs.length - 1].l) segs.push({ c: '', l: p }); else segs[segs.length - 1].l = p; }
+      });
+      song.lines.push({ t: 'inline', segs });
+      continue;
+    }
+
+    if (sawTitle && !song.artist && !song.lines.length && !isChordLine(line) && !SECTION_RE.test(line) && !/\[[A-G]/.test(line) && i > 0 && i === titleIdx + 1) { song.artist = line.trim(); continue; }
+    // first plain line = title (if no directive gave one), second plain line directly after = artist
+    if (!sawTitle && !song.lines.some(l => l.t !== 'blank')) { song.title = line.trim().replace(/\s+chords?$/i, ''); sawTitle = true; titleIdx = i; continue; }
+    song.lines.push({ t: 'lyric', s: line.replace(/\s+$/, '') });
+  }
+
+  // strip leading blanks
+  while (song.lines.length && song.lines[0].t === 'blank') song.lines.shift();
+
+  if (!song.key) {                       // fall back: first chord in the song
+    for (const l of song.lines) {
+      let first = null;
+      if (l.t === 'chords') first = l.s.trim().split(/\s+/).map(t => t.replace(/\*+$/, '')).find(t => CHORD_RE.test(t));
+      else if (l.t === 'inline') { const s = l.segs.find(s => s.c); first = s && s.c; }
+      if (first) { const m = CHORD_RE.exec(first); song.key = m[1] + m[2]; song.minor = /^m(?!aj)|^-/.test(m[3]); break; }
+    }
+  }
+  if (!song.key) song.key = 'C';
+  return song;
+}
+function setKey(song, v) {
+  const m = /^([A-G])([#b]?)\s*(m(?!aj)(?:in)?)?/.exec(v.trim());
+  if (!m) return;
+  song.key = m[1] + m[2]; song.minor = !!m[3];
+}
+
+/* ---------- Rendering ---------- */
+const $ = id => document.getElementById(id);
+let library = [];     // [{id,name,text,shift}]
+let curId = null;
+let curSong = null;
+let shift = 0;
+
+function flatsFor(song, sh) {
+  const root = (noteIndex(song.key[0], song.key[1] || '') + sh) % 12;
+  const maj = song.minor ? (root + 3) % 12 : root;
+  return FLAT_MAJORS.has(maj);
+}
+
+function transposeChordLine(s, sh, flats) {
+  let out = '';
+  const re = /\S+/g; let m;
+  while ((m = re.exec(s))) {
+    const t = transposeChord(m[0], sh, flats);
+    if (out.length < m.index) out += ' '.repeat(m.index - out.length);
+    else if (out.length && out[out.length - 1] !== ' ') out += ' ';
+    out += t;
+  }
+  return out;
+}
+
+function build() {
+  const box = $('song');
+  $('empty').style.display = curSong ? 'none' : 'flex';
+  if (!curSong) { box.innerHTML = ''; return null; }
+  const flats = flatsFor(curSong, shift);
+  const frag = document.createDocumentFragment();
+  const h = document.createElement('h1'); h.textContent = curSong.title; frag.appendChild(h);
+  const meta = document.createElement('div'); meta.className = 'meta';
+  const nowKey = keyLabel((noteIndex(curSong.key[0], curSong.key[1] || '') + shift) % 12, curSong.minor, flats);
+  const origKey = keyLabel(noteIndex(curSong.key[0], curSong.key[1] || ''), curSong.minor, flatsFor(curSong, 0));
+  meta.textContent = [curSong.artist, curSong.capo, 'Key: ' + nowKey + (shift ? '  (original ' + origKey + ')' : '')].filter(Boolean).join('  ·  ');
+  frag.appendChild(meta);
+
+  const el = (cls, txt) => { const d = document.createElement('div'); d.className = cls; if (txt != null) d.textContent = txt; return d; };
+  const showCh = !document.body.classList.contains('nochords');
+  // how many characters fit across the screen at the current font size
+  const probe = el('line', '0'.repeat(50)); probe.style.cssText = 'position:absolute;visibility:hidden';
+  document.body.appendChild(probe); const charW = probe.getBoundingClientRect().width / 50; probe.remove();
+  const maxCols = Math.floor((window.innerWidth - 52) / charW);
+
+  // pass 1: turn parsed lines into items
+  const items = []; let pend = null;
+  const flushPend = () => { if (pend != null) { items.push({ k: 'unit', t: 'chordonly', c: pend, s: '' }); pend = null; } };
+  for (const l of curSong.lines) {
+    if (l.t === 'blank' || l.t === 'section') { flushPend(); items.push({ k: l.t, s: l.s }); }
+    else if (l.t === 'chords') { flushPend(); pend = transposeChordLine(l.s, shift, flats); }
+    else if (l.t === 'lyric') { items.push({ k: 'unit', t: 'lyric', c: pend, s: l.s }); pend = null; }
+    else { items.push({ k: 'unit', t: 'inline', segs: l.segs.map(g => ({ c: g.c ? transposeChord(g.c, shift, flats) : '', l: g.l })) }); pend = null; }
+  }
+  flushPend();
+
+  const secKey = n => {
+    n = (n || '').toLowerCase();
+    if (/^intro/.test(n)) return 'intro';
+    if (/^verse/.test(n)) return 'verse';
+    if (/^(pre[- ]?chorus|chorus|refrain)/.test(n)) return 'chorus';
+    if (/^bridge/.test(n)) return 'bridge';
+    if (/^(solo|instrumental|interlude|break)/.test(n)) return 'solo';
+    if (/^(outro|ending|coda|tag)/.test(n)) return 'outro';
+    return '';
+  };
+  let cur = '';
+  // try to join two lyric lines into "one, two"
+  const tryJoin = (a, b) => {
+    if (!joinMode) return null;
+    if (a.t === 'lyric' && b.t === 'lyric') {
+      const l1 = a.s.replace(/\s+$/, '');
+      let l2 = b.s, c2 = b.c || '';
+      const lead = l2.length - l2.trimStart().length;
+      if (lead && c2.slice(0, lead).trim() === '') { l2 = l2.slice(lead); c2 = c2.slice(lead); }
+      const sep = /[,;:.!?]$/.test(l1) ? ' ' : ', ';
+      const off = l1.length + sep.length;
+      const c1 = (a.c || '').replace(/\s+$/, '');
+      if (showCh && c1.length >= off) return null;                // first line's chords run past its words
+      const lyric = l1 + sep + l2.trimEnd();
+      const chords = (c1 || c2.trim()) ? c1.padEnd(off) + c2.replace(/\s+$/, '') : null;
+      const width = Math.max(lyric.length, showCh && chords ? chords.length : 0);
+      return width <= maxCols ? { k: 'unit', t: 'lyric', c: chords, s: lyric } : null;
+    }
+    if (a.t === 'inline' && b.t === 'inline') {
+      const segs = a.segs.map(g => ({ ...g })).concat(b.segs.map(g => ({ ...g })));
+      const last = a.segs.length - 1;
+      if (!/[,;:.!?]\s*$/.test(segs[last].l)) segs[last].l = segs[last].l.replace(/\s+$/, '') + ',';
+      segs[last].l += ' ';
+      const width = segs.reduce((n, g) => n + Math.max(g.l.length, showCh ? g.c.length + 1 : 0), 0);
+      return width <= maxCols ? { k: 'unit', t: 'inline', segs } : null;
+    }
+    return null;
+  };
+
+  // pass 2: emit, joining pairs greedily within each block
+  const emit = u => {
+    const row = el('row2' + (cur ? ' sec-' + cur : '')), unit = el('unit');
+    if (u.t === 'inline') {
+      const d = el('line inline');
+      for (const sg of u.segs) {
+        const sp = document.createElement('span'); sp.className = 'seg';
+        const c = document.createElement('span'); c.className = 'c'; c.textContent = sg.c;
+        const t = document.createElement('span'); t.className = 'l'; t.textContent = sg.l;
+        sp.append(c, t); d.appendChild(sp);
+      }
+      unit.appendChild(d);
+    } else {
+      if (u.c != null && u.c.trim()) unit.appendChild(el('line chords', u.c));
+      if (u.t !== 'chordonly') unit.appendChild(el('line', u.s));
+    }
+    row.appendChild(unit); frag.appendChild(row);
+  };
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.k === 'blank') frag.appendChild(el('line blank'));
+    else if (it.k === 'section') { cur = secKey(it.s); frag.appendChild(el('line section' + (cur ? ' sec-' + cur : ''), it.s)); }
+    else {
+      const nx = items[i + 1];
+      const j = nx && nx.k === 'unit' ? tryJoin(it, nx) : null;
+      if (j) { emit(j); i++; } else emit(it);
+    }
+  }
+  box.replaceChildren(frag);
+  return flats;
+}
+function render() { const f = build(); if (curSong) { renderKeys(f); fit(); } }
+
+function keyLabel(idx, minor, flats) {
+  const n = (flats ? FLAT : SHARP)[idx];
+  return n + (minor ? 'm' : '');
+}
+
+function renderKeys(flats) {
+  const wrap = $('keys'); wrap.replaceChildren();
+  if (!curSong) return;
+  const origRoot = noteIndex(curSong.key[0], curSong.key[1] || '');
+  const curRoot = (origRoot + shift) % 12;
+  const names = curSong.minor ? KEY_MIN : KEY_MAJ;
+  names.forEach((n, i) => {
+    const b = document.createElement('button'); b.textContent = n;
+    if (i === curRoot) b.classList.add('sel');
+    if (i === origRoot) b.classList.add('orig');
+    b.onclick = () => setShift((i - origRoot + 12) % 12);
+    wrap.appendChild(b);
+  });
+  $('keyInfo').textContent = '— original ' + keyLabel(origRoot, curSong.minor, flatsFor(curSong, 0));
+}
+
+function setShift(n) {
+  shift = ((n % 12) + 12) % 12;
+  const e = library.find(s => s.id === curId); if (e) { e.shift = shift; saveLib(); }
+  render();
+}
+
+/* ---------- Library / persistence ---------- */
+function saveLib() { try { localStorage.setItem('sv.lib', JSON.stringify(library)); localStorage.setItem('sv.cur', curId || ''); } catch (e) {} }
+function loadLib() {
+  try { library = JSON.parse(localStorage.getItem('sv.lib') || '[]'); curId = localStorage.getItem('sv.cur') || null; } catch (e) { library = []; }
+  const fs = +localStorage.getItem('sv.fs'); if (fs) setSize(fs);
+  const lh = +localStorage.getItem('sv.lh'); if (lh) setLH(lh);
+  if (localStorage.getItem('sv.nochords') === '1') toggleChords(true);
+}
+function selectSong(id) {
+  const e = library.find(s => s.id === id); if (!e) return;
+  curId = id; curSong = parseSong(e.name, e.text); shift = e.shift || 0; saveLib();
+  window.scrollTo(0, 0); render(); renderList();
+}
+function renderList() {
+  const l = $('list'); l.replaceChildren();
+  library.forEach(e => {
+    const row = document.createElement('div'); row.className = 'item';
+    const b = document.createElement('button'); b.className = 'name' + (e.id === curId ? ' cur' : '');
+    b.textContent = e.name.replace(/\.[^.]+$/, ''); b.onclick = () => { selectSong(e.id); closePanel(); };
+    const x = document.createElement('button'); x.className = 'del'; x.textContent = '✕';
+    x.onclick = () => { if (!confirm('Remove "' + b.textContent + '"?')) return;
+      library = library.filter(s => s.id !== e.id);
+      if (curId === e.id) { curId = library[0] ? library[0].id : null; curSong = null; if (curId) selectSong(curId); else { saveLib(); render(); } }
+      saveLib(); renderList(); };
+    row.append(b, x); l.appendChild(row);
+  });
+  $('hint').textContent = library.length ? '' : 'No songs yet. Use “Add song files…” and pick your ChordClean .txt files (multi-select works).';
+}
+async function addFiles(files) {
+  let last = null;
+  for (const f of files) {
+    const text = await f.text();
+    const ex = library.find(s => s.name === f.name);
+    if (ex) { ex.text = text; last = ex.id; }
+    else { last = 's' + Date.now() + Math.random().toString(36).slice(2, 6); library.push({ id: last, name: f.name, text, shift: 0 }); }
+  }
+  library.sort((a, b) => a.name.localeCompare(b.name));
+  saveLib();
+  if (last) selectSong(last);
+  renderList();
+}
+
+/* ---------- UI wiring ---------- */
+function openPanel() { document.body.classList.add('open'); }
+function closePanel() { document.body.classList.remove('open'); }
+function setSize(px) { document.documentElement.style.setProperty('--fs', px + 'px'); $('size').value = px; if (!autofit) build(); try { localStorage.setItem('sv.fs', px); } catch (e) {} }
+function setLH(v) { document.documentElement.style.setProperty('--lh', v); $('lh').value = v; try { localStorage.setItem('sv.lh', v); } catch (e) {} fit(); }
+let joinMode = true;
+function setJoin(on) {
+  joinMode = on;
+  $('toggleJoin').textContent = 'Join short lines: ' + (on ? 'on' : 'off');
+  $('toggleJoin').classList.toggle('primary', on);
+  try { localStorage.setItem('sv.join', on ? '1' : '0'); } catch (e) {}
+  render();
+}
+function onResize() { if (autofit) fit(); else build(); }
+let autofit = false;
+function fit() {
+  if (!autofit || !curSong) return;
+  const root = document.documentElement;
+  let lo = 8, hi = 64;
+  for (let i = 0; i < 9; i++) {
+    const mid = (lo + hi) / 2;
+    root.style.setProperty('--fs', mid + 'px'); build();
+    const ok = root.scrollHeight <= window.innerHeight && root.scrollWidth <= window.innerWidth;
+    if (ok) lo = mid; else hi = mid;
+  }
+  root.style.setProperty('--fs', lo + 'px'); build();
+  $('size').value = Math.round(lo);
+  window.scrollTo(0, 0);
+}
+function setFit(on) {
+  autofit = on;
+  document.body.classList.toggle('fit', on);
+  $('size').disabled = on;
+  $('toggleFit').textContent = 'Auto-fit to screen: ' + (on ? 'on' : 'off');
+  $('toggleFit').classList.toggle('primary', on);
+  try { localStorage.setItem('sv.fit', on ? '1' : '0'); } catch (e) {}
+  if (on) fit(); else { const fs = +localStorage.getItem('sv.fs') || 26; setSize(fs); }
+}
+function toggleChords(force) {
+  const off = force === true ? true : !document.body.classList.contains('nochords');
+  document.body.classList.toggle('nochords', off);
+  $('toggleChords').textContent = off ? 'Show chords' : 'Hide chords';
+  try { localStorage.setItem('sv.nochords', off ? '1' : '0'); } catch (e) {}
+  build(); fit();
+}
+let wakeLock = null;
+async function toggleWake() {
+  try {
+    if (wakeLock) { await wakeLock.release(); wakeLock = null; $('toggleWake').textContent = 'Screen: normal'; }
+    else { wakeLock = await navigator.wakeLock.request('screen'); $('toggleWake').textContent = 'Screen: stay on';
+      wakeLock.addEventListener('release', () => { wakeLock = null; $('toggleWake').textContent = 'Screen: normal'; }); }
+  } catch (e) { $('toggleWake').textContent = 'Not supported'; }
+}
+document.addEventListener('visibilitychange', async () => {   // re-acquire after returning to the app
+  if (document.visibilityState === 'visible' && $('toggleWake').textContent === 'Screen: stay on' && !wakeLock) { wakeLock = null; toggleWake(); }
+});
+
+$('hot').addEventListener('click', () => document.body.classList.contains('open') ? closePanel() : openPanel());
+$('scrim').addEventListener('click', closePanel);
+$('size').addEventListener('input', e => setSize(+e.target.value));
+$('lh').addEventListener('input', e => setLH(+e.target.value));
+$('toggleChords').onclick = () => toggleChords();
+$('toggleJoin').onclick = () => setJoin(!joinMode);
+$('toggleFit').onclick = () => setFit(!autofit);
+window.addEventListener('resize', onResize);
+$('toggleWake').onclick = toggleWake;
+$('up').onclick = () => setShift(shift + 1);
+$('down').onclick = () => setShift(shift - 1);
+$('reset').onclick = () => setShift(0);
+const pick = () => $('file').click();
+$('openBtn').onclick = pick; $('openBtn0').onclick = pick;
+$('file').addEventListener('change', async e => { await addFiles([...e.target.files]); e.target.value = ''; });
+// hardware keyboard / Bluetooth pedal friendly: arrows change key, Escape closes
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closePanel();
+  else if (e.key === 'ArrowUp' && e.shiftKey) setShift(shift + 1);
+  else if (e.key === 'ArrowDown' && e.shiftKey) setShift(shift - 1);
+});
+
+loadLib(); renderList();
+if (localStorage.getItem('sv.join') === '0') setJoin(false);
+if (localStorage.getItem('sv.fit') === '1') setFit(true);
+if (curId && library.some(s => s.id === curId)) selectSong(curId); else if (library[0]) selectSong(library[0].id); else render();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
