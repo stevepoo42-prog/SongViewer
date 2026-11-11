@@ -43,7 +43,7 @@
   body.nochords .line.chords, body.nochords .seg .c { display:none; }
   
 
-  body.fit #song { padding-bottom:8px; }
+  body.fit #song { padding-bottom:calc(env(safe-area-inset-bottom) + 18px); }   /* clear of the iPad home bar */
   #empty { position:fixed; inset:0; display:none; flex-direction:column; align-items:center; justify-content:center;
     gap:16px; color:var(--muted); text-align:center; padding:24px; }
   #empty button { font-size:20px; }
@@ -993,7 +993,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v10 · 11 Nov 13:47';   // bump on every commit
+const APP_VERSION = 'v11 · 11 Nov 13:51';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
@@ -1061,16 +1061,20 @@ let autofit = false;
 function fit() {
   if (!autofit || !curSong) return;
   const root = document.documentElement;
-  let lo = 8, hi = 64;
-  for (let i = 0; i < 9; i++) {
+  const viewH = () => Math.min(window.innerHeight, (window.visualViewport && window.visualViewport.height) || Infinity);
+  const fits = () => root.scrollHeight <= viewH() && root.scrollWidth <= window.innerWidth;
+  const MIN = 6;
+  let lo = MIN, hi = 64;
+  for (let i = 0; i < 10; i++) {
     const mid = (lo + hi) / 2;
     root.style.setProperty('--fs', mid + 'px'); build();
-    const ok = root.scrollHeight <= window.innerHeight && root.scrollWidth <= window.innerWidth;
-    if (ok) lo = mid; else hi = mid;
+    if (fits()) lo = mid; else hi = mid;
   }
   root.style.setProperty('--fs', lo + 'px'); build();
   $('size').value = Math.round(lo);
   window.scrollTo(0, 0);
+  if (!fits() && !fit.warned) { fit.warned = true; toast('This song is too long to fit at any size, so the last lines need scrolling'); }
+  else if (fits()) fit.warned = false;
 }
 /* ---------- Per-song display settings ---------- */
 const DEF0 = { fs: 26, lh: 1, fit: false, join: true, nochords: false, spd: 12, wrap: true };
