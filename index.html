@@ -1269,7 +1269,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v20 · 11 Nov 20:23';   // bump on every commit
+const APP_VERSION = 'v21 · 11 Nov 20:59';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
@@ -1300,7 +1300,7 @@ async function mirrorNow() {
     const data = svKeys();
     if (!('sv.lib' in data)) return;                 // never replace the safety copy with an empty store
     const ts = Date.now();
-    if (HOST) { _lsSet.call(localStorage, 'sv.ts', String(ts)); HOST.postMessage({ type: 'save', data: { ...data, 'sv.ts': String(ts) } }).catch(() => {}); mirrorOk = true; return; }
+    if (HOST) { _lsSet.call(localStorage, 'sv.ts', String(ts)); mirrorOk = true; try { await HOST.postMessage({ type: 'save', data: { ...data, 'sv.ts': String(ts) } }); } catch (e) {} return; }   // wait for the app to take it, so a flush on quit really finishes
     await idbPut('state', { ts, data }); _lsSet.call(localStorage, 'sv.ts', String(ts)); mirrorOk = true;
   } catch (e) { mirrorOk = false; }
 }
