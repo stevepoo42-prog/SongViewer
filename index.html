@@ -48,6 +48,10 @@
   #empty button { font-size:20px; }
 
   /* Invisible tap zone in the top-right corner + small hint icon */
+  html,body { touch-action:manipulation; }
+  .edge { position:fixed; bottom:0; width:14vw; max-width:180px; z-index:15; }
+  #edgeL { left:0; top:0; } #edgeR { right:0; top:min(18vh,160px); }
+  .edge.flash { background:rgba(255,255,255,.10); }
   #hot { position:fixed; top:0; right:0; width:22vw; max-width:220px; height:18vh; max-height:160px; z-index:20; }
   #gear { position:fixed; top:calc(env(safe-area-inset-top) + 10px); right:14px; z-index:21; font-size:22px;
     opacity:.25; pointer-events:none; }
@@ -124,6 +128,8 @@
   <div id="libActions"></div>
 </div>
 <div id="toast"></div>
+<div class="edge" id="edgeL" aria-label="Previous song"></div>
+<div class="edge" id="edgeR" aria-label="Next song"></div>
 <div id="hot" aria-label="Open controls"></div>
 <div id="gear">⚙︎</div>
 <div id="scrim"></div>
@@ -149,6 +155,12 @@
 
   <div class="row" style="margin-top:10px"><button id="saveDef">Use as default for all songs</button><button id="resetSong">Reset this song</button></div>
   <p class="info" id="prefNote"></p>
+
+  <h2>Hands-free</h2>
+  <div class="row"><button id="toggleScroll">Auto-scroll: off</button></div>
+  <div class="row" style="margin-top:10px"><label id="spdLabel">Speed</label><input id="spd" type="range" min="2" max="60" value="12"></div>
+  <div class="row" style="margin-top:10px"><button id="toggleEdge">Edge taps: on</button></div>
+  <p class="info">Tap the left or right edge of the screen for the previous or next song. Double-tap the middle of the song to start or stop auto-scroll (turn auto-fit off first). Pedal or keyboard: Right, Down, Page Down or Space scrolls a page, then goes to the next song; Left, Up or Page Up goes back; Enter starts or stops auto-scroll.</p>
 
   <h2>Library</h2>
   <div class="row"><button class="primary" id="openLib">Library: Songs · Books · Sets</button></div>
@@ -430,7 +442,7 @@ function loadLib() {
 function selectSong(id) {
   const e = songById(id); if (!e) return;
   if (!ctxIds().includes(id)) ctx = null;
-  curId = id; curSong = parseSong(e.name, e.text); shift = e.shift || 0; saveLib(); saveBS(); applyPrefs();
+  curId = id; curSong = parseSong(e.name, e.text); shift = e.shift || 0; saveLib(); saveBS(); applyPrefs(); holdUntil = performance.now() + 2500;
   window.scrollTo(0, 0); render(); updateNav();
 }
 async function addFiles(files) {
@@ -485,8 +497,11 @@ function ctxIds() {
 }
 function stepSong(d) {
   const ids = ctxIds(); if (!ids.length) return;
-  let i = ids.indexOf(curId); if (i < 0) i = 0; else i = Math.min(ids.length - 1, Math.max(0, i + d));
-  selectSong(ids[i]);
+  const i = ids.indexOf(curId);
+  if (i < 0) { selectSong(ids[0]); return; }
+  const j = i + d;
+  if (j < 0 || j >= ids.length) { toast(d > 0 ? 'Last song' : 'First song'); return; }
+  selectSong(ids[j]);
 }
 function updateNav() {
   const ids = ctxIds(), i = ids.indexOf(curId);
@@ -630,7 +645,7 @@ async function addSongsToView() {
 
 /* --- the library screen --- */
 function openLib() { lib.open = true; $('libScreen').style.display = 'flex'; closePanel(); renderLibrary(); }
-function closeLib() { lib.open = false; $('libScreen').style.display = 'none'; }
+function closeLib() { lib.open = false; $('libScreen').style.display = 'none'; if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); }
 function setTab(t) { try { localStorage.setItem('sv.tab', t); } catch (e) {} lib.tab = t; lib.view = null; lib.sel.clear(); lib.q = ''; renderLibrary(); }
 
 function songRows(ids, context, reorder) {
@@ -805,9 +820,53 @@ async function importBackupFile(f) {
   else if (choice === 'replace' && await askConfirm('Replace ALL songs, books, sets and settings on this iPad with this backup?', 'Replace')) applyReplace(b);
 }
 
+/* ---------- Hands-free: auto-scroll, edge taps, pedal keys ---------- */
+let scrolling = false, scrollSpeed = 12, rafId = 0, lastT = 0, acc = 0, holdUntil = 0, edgeOn = true;
+const maxScrollY = () => document.documentElement.scrollHeight - window.innerHeight;
+function scrollLabel() {
+  $('toggleScroll').textContent = 'Auto-scroll: ' + (scrolling ? 'on' : 'off');
+  $('toggleScroll').classList.toggle('primary', scrolling);
+}
+function applySpeed(v) { scrollSpeed = v; $('spd').value = v; $('spdLabel').textContent = 'Speed ' + v + ' lines/min'; }
+function setSpeed(v) { applySpeed(v); remember('spd', v); }
+function scrollLoop(t) {
+  if (!scrolling) return;
+  const dt = Math.min(0.1, (t - lastT) / 1000); lastT = t;
+  if (t >= holdUntil) {
+    const cs = getComputedStyle(document.documentElement);
+    const lineH = parseFloat(cs.getPropertyValue('--fs')) * parseFloat(cs.getPropertyValue('--lh'));
+    acc += scrollSpeed / 60 * lineH * dt;
+    const whole = Math.floor(acc);
+    if (whole >= 1) { window.scrollBy(0, whole); acc -= whole; }
+    if (window.scrollY >= maxScrollY() - 1) { stopScroll(); toast('End of song'); return; }
+  }
+  rafId = requestAnimationFrame(scrollLoop);
+}
+function startScroll() {
+  if (scrolling) return;
+  if (autofit) { toast('Turn off auto-fit to use auto-scroll'); return; }
+  if (maxScrollY() <= 4) { toast('This song fits the screen, so there is nothing to scroll'); return; }
+  scrolling = true; acc = 0; lastT = performance.now();
+  holdUntil = window.scrollY < 5 ? lastT + 2500 : 0;       // a moment to read the top before it moves
+  scrollLabel(); rafId = requestAnimationFrame(scrollLoop);
+}
+function stopScroll() { scrolling = false; cancelAnimationFrame(rafId); scrollLabel(); }
+function toggleScroll() { scrolling ? stopScroll() : startScroll(); }
+
+function pedal(dir) {                       // scroll a page; when there is no more to scroll, change song
+  const page = window.innerHeight * 0.85, y = window.scrollY;
+  if (dir > 0) { if (maxScrollY() > 4 && y < maxScrollY() - 4) window.scrollBy({ top: page, behavior: 'smooth' }); else stepSong(1); }
+  else { if (y > 4) window.scrollBy({ top: -page, behavior: 'smooth' }); else stepSong(-1); }
+}
+function flash(el) { el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 180); }
+function applyEdge() {
+  $('edgeL').style.display = $('edgeR').style.display = edgeOn ? 'block' : 'none';
+  $('toggleEdge').textContent = 'Edge taps: ' + (edgeOn ? 'on' : 'off'); $('toggleEdge').classList.toggle('primary', edgeOn);
+}
+
 /* ---------- UI wiring ---------- */
 function openPanel() { document.body.classList.add('open'); }
-function closePanel() { document.body.classList.remove('open'); }
+function closePanel() { document.body.classList.remove('open'); if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); }
 let joinMode = true;
 function onResize() { if (autofit) fit(); else build(); }
 let autofit = false;
@@ -826,7 +885,7 @@ function fit() {
   window.scrollTo(0, 0);
 }
 /* ---------- Per-song display settings ---------- */
-const DEF0 = { fs: 26, lh: 1, fit: false, join: true, nochords: false };
+const DEF0 = { fs: 26, lh: 1, fit: false, join: true, nochords: false, spd: 12 };
 let defaults = { ...DEF0 };       // used by songs that have no settings of their own
 let prefs = {};                   // { songId: { fs, lh, fit, join, nochords } } - only what you changed for that song
 const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
@@ -836,7 +895,7 @@ function loadPrefs() {
   try {
     const d = JSON.parse(lsGet('sv.def') || 'null');
     if (d) defaults = { ...DEF0, ...d };
-    else defaults = {              // first run after upgrading: start from the old global values
+    else defaults = { ...DEF0,     // first run after upgrading: start from the old global values
       fs: +lsGet('sv.fs') || DEF0.fs, lh: +lsGet('sv.lh') || DEF0.lh,
       fit: lsGet('sv.fit') === '1', join: lsGet('sv.join') !== '0', nochords: lsGet('sv.nochords') === '1' };
   } catch (e) {}
@@ -869,7 +928,7 @@ function applyChords(off) {
   $('toggleChords').textContent = off ? 'Show chords' : 'Hide chords';
 }
 function applyPrefs() {            // switch the whole display to the open song's settings
-  applySize(eff('fs')); applyLH(eff('lh')); applyJoin(eff('join')); applyFit(eff('fit')); applyChords(eff('nochords'));
+  applySize(eff('fs')); applyLH(eff('lh')); applyJoin(eff('join')); applyFit(eff('fit')); applyChords(eff('nochords')); applySpeed(eff('spd'));
   updatePrefNote();
 }
 function setSize(px) { applySize(px); remember('fs', px); refresh(); }
@@ -878,7 +937,7 @@ function setJoin(on) { applyJoin(on); remember('join', on); refresh(); }
 function setFit(on) { if (!on) applySize(eff('fs')); applyFit(on); remember('fit', on); refresh(); }
 function toggleChords() { const off = !document.body.classList.contains('nochords'); applyChords(off); remember('nochords', off); refresh(); }
 function saveDefaults() {
-  defaults = { fs: eff('fs'), lh: eff('lh'), fit: eff('fit'), join: eff('join'), nochords: eff('nochords') };
+  defaults = { fs: eff('fs'), lh: eff('lh'), fit: eff('fit'), join: eff('join'), nochords: eff('nochords'), spd: eff('spd') };
   lsSet('sv.def', JSON.stringify(defaults)); toast('Saved as the default for songs without their own settings');
 }
 function resetSongPrefs() {
@@ -919,24 +978,45 @@ const pick = () => $('file').click();
 $('openBtn0').onclick = pick; $('libAdd').onclick = pick;
 $('libBackup').onclick = backupDialog;
 $('importFile').addEventListener('change', async e => { const f = e.target.files[0]; e.target.value = ''; if (f) await importBackupFile(f); });
+$('edgeL').addEventListener('click', () => { flash($('edgeL')); stepSong(-1); });
+$('edgeR').addEventListener('click', () => { flash($('edgeR')); stepSong(1); });
+$('toggleEdge').onclick = () => { edgeOn = !edgeOn; try { localStorage.setItem('sv.edge', edgeOn ? '1' : '0'); } catch (e) {} applyEdge(); };
+$('toggleScroll').onclick = () => { toggleScroll(); if (scrolling) closePanel(); };
+$('spd').addEventListener('input', e => setSpeed(+e.target.value));
+// touching or wheel-scrolling the song yourself takes over from auto-scroll
+['touchstart', 'wheel'].forEach(ev => $('song').addEventListener(ev, () => { if (scrolling) stopScroll(); }, { passive: true }));
+// double-tap the middle of the song to start/stop auto-scroll
+let tapT = 0, tapX = 0, tapY = 0, downX = 0, downY = 0;
+$('song').addEventListener('pointerdown', e => { downX = e.clientX; downY = e.clientY; }, { passive: true });
+$('song').addEventListener('pointerup', e => {
+  if (Math.hypot(e.clientX - downX, e.clientY - downY) > 10) return;
+  const now = performance.now();
+  if (now - tapT < 320 && Math.hypot(e.clientX - tapX, e.clientY - tapY) < 40) { tapT = 0; toggleScroll(); }
+  else { tapT = now; tapX = e.clientX; tapY = e.clientY; }
+});
 $('openLib').onclick = openLib; $('openLib0').onclick = openLib; $('libClose').onclick = closeLib;
 document.querySelectorAll('#libTabs button').forEach(b => { b.onclick = () => setTab(b.dataset.tab); });
 $('prevSong').onclick = () => stepSong(-1); $('nextSong').onclick = () => stepSong(1);
 $('file').addEventListener('change', async e => { await addFiles([...e.target.files]); e.target.value = ''; });
 // hardware keyboard / Bluetooth pedal friendly: arrows change key, Escape closes
 document.addEventListener('keydown', e => {
-  if (/^(INPUT|SELECT|TEXTAREA)$/.test((document.activeElement || {}).tagName) && document.activeElement.type !== 'checkbox') return;
+  const ae = document.activeElement || {};
+  if (/^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && ae.type !== 'checkbox') return;
   if (lib.open) { if (e.key === 'Escape') closeLib(); return; }
-  if (e.key === 'Escape') closePanel();
-  else if (e.key === 'ArrowRight' || e.key === 'PageDown') { stepSong(1); e.preventDefault(); }
-  else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { stepSong(-1); e.preventDefault(); }
-  else if (e.key === 'ArrowUp' && e.shiftKey) setShift(shift + 1);
-  else if (e.key === 'ArrowDown' && e.shiftKey) setShift(shift - 1);
+  if (document.body.classList.contains('open')) { if (e.key === 'Escape') closePanel(); return; }
+  if (ae.tagName === 'BUTTON' && ae.blur) ae.blur();           // so Space/Enter never click a leftover button
+  if (e.repeat) return;
+  if (e.shiftKey && e.key === 'ArrowUp') setShift(shift + 1);
+  else if (e.shiftKey && e.key === 'ArrowDown') setShift(shift - 1);
+  else if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(e.key)) { e.preventDefault(); stopScroll(); pedal(1); }
+  else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key)) { e.preventDefault(); stopScroll(); pedal(-1); }
+  else if (e.key === 'Enter') { e.preventDefault(); toggleScroll(); }
 });
 
 loadLib(); loadBS(); loadPrefs();
 try { const t = localStorage.getItem('sv.tab'); if (t === 'songs' || t === 'books' || t === 'sets') lib.tab = t; } catch (e) {}
 if (localStorage.getItem('sv.wake') === '1') setWake(true); else wakeLabel();
+edgeOn = localStorage.getItem('sv.edge') !== '0'; applyEdge(); scrollLabel();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});   // ask iOS/Chrome not to evict saved songs & settings
 if (curId && library.some(s => s.id === curId)) selectSong(curId); else if (library[0]) selectSong(library[0].id); else { applyPrefs(); render(); }
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
