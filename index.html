@@ -75,6 +75,29 @@
   .item .name { flex:1; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .item .name.cur { background:var(--accent); }
   .item .del { flex:none; width:44px; color:#ff6b6b; }
+  #libScreen { position:fixed; inset:0; z-index:40; background:var(--bg); display:none; flex-direction:column; padding-top:env(safe-area-inset-top); }
+  #libHead { display:flex; gap:8px; align-items:center; padding:10px 14px; background:var(--panel); }
+  #libTabs { flex:1; display:flex; gap:6px; justify-content:center; }
+  #libTabs button { min-width:90px; font-weight:600; } #libTabs button.sel { background:var(--accent); }
+  #libSub { display:flex; gap:8px; align-items:center; padding:10px 14px; flex-wrap:wrap; }
+  #libSub .ltitle { font-weight:700; font-size:18px; margin-right:auto; }
+  #libSub input[type=search] { font:inherit; padding:10px 12px; border-radius:10px; border:0; background:var(--btn); color:var(--fg); min-width:160px; }
+  #libBody { flex:1; overflow-y:auto; padding:0 14px 10px; }
+  #libActions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; padding:10px 14px calc(env(safe-area-inset-bottom) + 10px); background:var(--panel); }
+  button:disabled { opacity:.35; } button.danger { color:#ff6b6b; }
+  .lrow { display:flex; align-items:center; gap:10px; min-height:54px; border-bottom:1px solid #222; }
+  .lrow input[type=checkbox] { width:26px; height:26px; flex:none; }
+  .lrow .lname { flex:1; text-align:left; background:none; font-size:19px; padding:12px 6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .lrow .lname.cur { color:var(--chord); } .lrow .mv { flex:none; width:46px; padding:10px 0; }
+  .lrow .del { color:#ff6b6b; }
+  .dlg { position:fixed; inset:0; z-index:60; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; padding:20px; }
+  .dbox { background:var(--panel); border-radius:14px; padding:16px; width:min(480px,100%); max-height:85vh; display:flex; flex-direction:column; gap:8px; }
+  .dbox h3 { margin:0 0 4px; } .dlist { overflow-y:auto; flex:1; min-height:80px; display:flex; flex-direction:column; gap:6px; }
+  .dbox select { font:inherit; padding:12px; border-radius:10px; background:var(--btn); color:var(--fg); border:0; }
+  .dopt { text-align:left; }
+  .dtext { font:inherit; font-size:18px; padding:12px; border-radius:10px; border:0; background:var(--btn); color:var(--fg); }
+  .dbox .row > * { flex:1; }
+  #toast { position:fixed; left:50%; bottom:90px; transform:translateX(-50%); background:#3a3a3c; color:#fff; padding:10px 18px; border-radius:20px; z-index:70; display:none; max-width:90vw; }
   .info { color:var(--muted); font-size:14px; line-height:1.4; }
 </style>
 </head>
@@ -84,8 +107,20 @@
   <div style="font-size:28px;color:var(--fg)">No song loaded</div>
   <div>Open text files made with ChordClean</div>
   <button class="primary" id="openBtn0">Open song files…</button>
+  <button id="openLib0">Open library</button>
 </div>
 
+<div id="libScreen">
+  <div id="libHead">
+    <button id="libClose">Done</button>
+    <div id="libTabs"><button data-tab="songs">Songs</button><button data-tab="books">Books</button><button data-tab="sets">Sets</button></div>
+    <button class="primary" id="libAdd">＋ Add files</button>
+  </div>
+  <div id="libSub"></div>
+  <div id="libBody"></div>
+  <div id="libActions"></div>
+</div>
+<div id="toast"></div>
 <div id="hot" aria-label="Open controls"></div>
 <div id="gear">⚙︎</div>
 <div id="scrim"></div>
@@ -109,10 +144,16 @@
     <button id="toggleWake">Screen: normal</button>
   </div>
 
-  <h2>Songs</h2>
-  <div class="row" style="margin-bottom:8px"><button class="primary" id="openBtn">Add song files…</button></div>
-  <div id="list"></div>
-  <p class="info" id="hint"></p>
+  <div class="row" style="margin-top:10px"><button id="saveDef">Use as default for all songs</button><button id="resetSong">Reset this song</button></div>
+  <p class="info" id="prefNote"></p>
+
+  <h2>Library</h2>
+  <div class="row"><button class="primary" id="openLib">Library: Songs · Books · Sets</button></div>
+  <div class="row" style="margin-top:8px">
+    <button id="prevSong">◀ Prev</button>
+    <div class="info" id="navInfo" style="text-align:center"></div>
+    <button id="nextSong">Next ▶</button>
+  </div>
 </aside>
 
 <input id="file" type="file" accept=".txt,.text,.cho,.crd,.chopro,.pro,.onsong,text/plain" multiple hidden>
@@ -381,57 +422,302 @@ function setShift(n) {
 function saveLib() { try { localStorage.setItem('sv.lib', JSON.stringify(library)); localStorage.setItem('sv.cur', curId || ''); } catch (e) {} }
 function loadLib() {
   try { library = JSON.parse(localStorage.getItem('sv.lib') || '[]'); curId = localStorage.getItem('sv.cur') || null; } catch (e) { library = []; }
-  const fs = +localStorage.getItem('sv.fs'); if (fs) setSize(fs);
-  const lh = +localStorage.getItem('sv.lh'); if (lh) setLH(lh);
-  if (localStorage.getItem('sv.nochords') === '1') toggleChords(true);
 }
 function selectSong(id) {
-  const e = library.find(s => s.id === id); if (!e) return;
-  curId = id; curSong = parseSong(e.name, e.text); shift = e.shift || 0; saveLib();
-  window.scrollTo(0, 0); render(); renderList();
-}
-function renderList() {
-  const l = $('list'); l.replaceChildren();
-  library.forEach(e => {
-    const row = document.createElement('div'); row.className = 'item';
-    const b = document.createElement('button'); b.className = 'name' + (e.id === curId ? ' cur' : '');
-    b.textContent = e.name.replace(/\.[^.]+$/, ''); b.onclick = () => { selectSong(e.id); closePanel(); };
-    const x = document.createElement('button'); x.className = 'del'; x.textContent = '✕';
-    x.onclick = () => { if (!confirm('Remove "' + b.textContent + '"?')) return;
-      library = library.filter(s => s.id !== e.id);
-      if (curId === e.id) { curId = library[0] ? library[0].id : null; curSong = null; if (curId) selectSong(curId); else { saveLib(); render(); } }
-      saveLib(); renderList(); };
-    row.append(b, x); l.appendChild(row);
-  });
-  $('hint').textContent = library.length ? '' : 'No songs yet. Use “Add song files…” and pick your ChordClean .txt files (multi-select works).';
+  const e = songById(id); if (!e) return;
+  if (!ctxIds().includes(id)) ctx = null;
+  curId = id; curSong = parseSong(e.name, e.text); shift = e.shift || 0; saveLib(); saveBS(); applyPrefs();
+  window.scrollTo(0, 0); render(); updateNav();
 }
 async function addFiles(files) {
-  let last = null;
+  let n = 0;
   for (const f of files) {
     const text = await f.text();
     const ex = library.find(s => s.name === f.name);
-    if (ex) { ex.text = text; last = ex.id; }
-    else { last = 's' + Date.now() + Math.random().toString(36).slice(2, 6); library.push({ id: last, name: f.name, text, shift: 0 }); }
+    if (ex) ex.text = text;
+    else library.push({ id: 's' + Date.now() + Math.random().toString(36).slice(2, 6), name: f.name, text, shift: 0 });
+    n++;
   }
   library.sort((a, b) => a.name.localeCompare(b.name));
-  saveLib();
-  if (last) selectSong(last);
-  renderList();
+  saveLib(); toast('Added ' + n + ' song' + (n === 1 ? '' : 's'));
+  if (!curSong && library[0]) selectSong(library[0].id); else updateNav();
+  renderLibrary();
+}
+
+/* ---------- Books, Sets and the library screen ---------- */
+let books = [], sets = [];            // [{id, name, ids:[songId,...]}]  (ids point into the Songs library)
+let ctx = null;                       // where the open song came from: {type:'songs'|'book'|'set', id}
+const lib = { open: false, tab: 'songs', view: null, sel: new Set(), q: '' };
+
+const uid = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+const songById = id => library.find(s => s.id === id);
+const songTitle = s => s.name.replace(/\.[^.]+$/, '');
+const listOf = (type, id) => type === 'book' ? books.find(b => b.id === id) : type === 'set' ? sets.find(b => b.id === id) : null;
+const mk = (tag, cls, txt) => { const d = document.createElement(tag); if (cls) d.className = cls; if (txt != null) d.textContent = txt; return d; };
+const btn = (label, fn, cls) => { const b = mk('button', cls, label); b.onclick = fn; return b; };
+
+function saveBS() {
+  try { localStorage.setItem('sv.books', JSON.stringify(books)); localStorage.setItem('sv.sets', JSON.stringify(sets)); localStorage.setItem('sv.ctx', JSON.stringify(ctx)); } catch (e) {}
+}
+function loadBS() {
+  try {
+    books = JSON.parse(localStorage.getItem('sv.books') || '[]');
+    sets = JSON.parse(localStorage.getItem('sv.sets') || '[]');
+    ctx = JSON.parse(localStorage.getItem('sv.ctx') || 'null');
+  } catch (e) { books = []; sets = []; ctx = null; }
+}
+
+let toastTimer;
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.style.display = 'none'; }, 2200);
+}
+
+/* --- which songs "next / previous" walks through --- */
+function ctxIds() {
+  if (!ctx || ctx.type === 'songs') return library.map(s => s.id);
+  const l = listOf(ctx.type, ctx.id);
+  return l ? l.ids.filter(songById) : library.map(s => s.id);
+}
+function stepSong(d) {
+  const ids = ctxIds(); if (!ids.length) return;
+  let i = ids.indexOf(curId); if (i < 0) i = 0; else i = Math.min(ids.length - 1, Math.max(0, i + d));
+  selectSong(ids[i]);
+}
+function updateNav() {
+  const ids = ctxIds(), i = ids.indexOf(curId);
+  const l = ctx && ctx.type !== 'songs' ? listOf(ctx.type, ctx.id) : null;
+  const where = l ? (ctx.type === 'book' ? 'Book: ' : 'Set: ') + l.name : 'All songs';
+  $('navInfo').textContent = (i >= 0 ? (i + 1) + ' / ' + ids.length + ' · ' : '') + where;
+  $('prevSong').disabled = i <= 0;
+  $('nextSong').disabled = i < 0 || i >= ids.length - 1;
+}
+
+/* --- small dialogs --- */
+function dialog(build) {
+  return new Promise(res => {
+    const ov = mk('div', 'dlg'), box = mk('div', 'dbox'); ov.appendChild(box);
+    const close = v => { ov.remove(); res(v); };
+    ov.onclick = e => { if (e.target === ov) close(null); };
+    build(box, close); document.body.appendChild(ov);
+  });
+}
+function askText(title, initial) {
+  return dialog((box, close) => {
+    box.appendChild(mk('h3', '', title));
+    const i = document.createElement('input'); i.type = 'text'; i.value = initial || ''; i.className = 'dtext';
+    i.onkeydown = e => { if (e.key === 'Enter') close(i.value); };
+    box.appendChild(i);
+    const row = mk('div', 'row'); row.append(btn('Cancel', () => close(null)), btn('OK', () => close(i.value), 'primary'));
+    box.appendChild(row); setTimeout(() => { i.focus(); i.select(); }, 60);
+  });
+}
+function askConfirm(msg, okLabel) {
+  return dialog((box, close) => {
+    box.appendChild(mk('p', '', msg));
+    const row = mk('div', 'row'); row.append(btn('Cancel', () => close(false)), btn(okLabel || 'OK', () => close(true), 'danger'));
+    box.appendChild(row);
+  }).then(v => !!v);
+}
+function choose(title, opts, newLabel) {
+  return dialog((box, close) => {
+    box.appendChild(mk('h3', '', title));
+    const list = mk('div', 'dlist');
+    opts.forEach(o => list.appendChild(btn(o.label, () => close(o.id), 'dopt')));
+    box.appendChild(list);
+    if (newLabel) box.appendChild(btn('＋ ' + newLabel, () => close('__new'), 'primary'));
+    box.appendChild(btn('Cancel', () => close(null)));
+  });
+}
+function pickSongs(title, sources) {          // sources: [{label, ids}] -> resolves with chosen song ids
+  return dialog((box, close) => {
+    const picked = new Set(); let si = 0;
+    box.appendChild(mk('h3', '', title));
+    const list = mk('div', 'dlist');
+    const go = btn('Add 0', () => close([...picked]), 'primary');
+    const draw = () => {
+      list.replaceChildren();
+      sources[si].ids.forEach(id => {
+        const s = songById(id); if (!s) return;
+        const lab = mk('label', 'lrow');
+        const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = picked.has(id);
+        cb.onchange = () => { cb.checked ? picked.add(id) : picked.delete(id); go.textContent = 'Add ' + picked.size; };
+        lab.append(cb, mk('span', 'lname', songTitle(s))); list.appendChild(lab);
+      });
+      if (!list.children.length) list.appendChild(mk('p', 'info', 'Nothing here yet.'));
+      go.textContent = 'Add ' + picked.size;
+    };
+    if (sources.length > 1) {
+      const sel = document.createElement('select');
+      sources.forEach((s, i) => sel.add(new Option(s.label, i)));
+      sel.onchange = () => { si = +sel.value; draw(); };
+      box.appendChild(sel);
+    }
+    box.appendChild(list);
+    const row = mk('div', 'row');
+    row.append(btn('Select all', () => { sources[si].ids.forEach(id => picked.add(id)); draw(); }), btn('Cancel', () => close(null)), go);
+    box.appendChild(row); draw();
+  });
+}
+
+/* --- actions --- */
+async function addToList(type, ids) {
+  const coll = type === 'book' ? books : sets;
+  const choice = await choose('Add ' + ids.length + ' song' + (ids.length === 1 ? '' : 's') + ' to…',
+    coll.map(x => ({ id: x.id, label: x.name + '  (' + x.ids.length + ')' })), 'New ' + type + '…');
+  if (!choice) return;
+  let target;
+  if (choice === '__new') {
+    const n = await askText('Name for the new ' + type, ''); if (!n || !n.trim()) return;
+    target = { id: uid(type[0]), name: n.trim(), ids: [] }; coll.push(target);
+  } else target = coll.find(x => x.id === choice);
+  let added = 0;
+  ids.forEach(id => { if (!target.ids.includes(id)) { target.ids.push(id); added++; } });
+  if (type === 'book') target.ids.sort((a, b) => songTitle(songById(a)).localeCompare(songTitle(songById(b))));
+  saveBS(); lib.sel.clear(); renderLibrary();
+  toast('Added ' + added + ' to ' + (type === 'book' ? 'book “' : 'set “') + target.name + '”');
+}
+async function newList(type) {
+  const n = await askText('Name for the new ' + type, ''); if (!n || !n.trim()) return;
+  (type === 'book' ? books : sets).push({ id: uid(type[0]), name: n.trim(), ids: [] });
+  saveBS(); renderLibrary();
+}
+async function deleteList(type, id) {
+  const l = listOf(type, id); if (!l || !(await askConfirm('Delete ' + type + ' “' + l.name + '”? The songs stay in your library.', 'Delete'))) return;
+  if (type === 'book') books = books.filter(b => b.id !== id); else sets = sets.filter(b => b.id !== id);
+  if (ctx && ctx.type === type && ctx.id === id) ctx = null;
+  if (lib.view && lib.view.id === id) lib.view = null;
+  saveBS(); renderLibrary(); updateNav();
+}
+async function renameList() {
+  const l = lib.view && listOf(lib.view.type, lib.view.id); if (!l) return;
+  const n = await askText('Rename ' + lib.view.type, l.name); if (!n || !n.trim()) return;
+  l.name = n.trim(); saveBS(); renderLibrary(); updateNav();
+}
+async function deleteSongs(ids) {
+  if (!(await askConfirm('Remove ' + ids.length + ' song' + (ids.length === 1 ? '' : 's') + ' from the library? They will also be removed from every Book and Set.', 'Remove'))) return;
+  library = library.filter(s => !ids.includes(s.id));
+  books.forEach(b => { b.ids = b.ids.filter(i => !ids.includes(i)); });
+  sets.forEach(b => { b.ids = b.ids.filter(i => !ids.includes(i)); });
+  ids.forEach(i => { delete prefs[i]; }); savePrefs();
+  lib.sel.clear();
+  if (ids.includes(curId)) { curId = library[0] ? library[0].id : null; curSong = null; }
+  saveLib(); saveBS();
+  if (curId && !curSong) selectSong(curId); else if (!curId) { render(); updateNav(); }
+  renderLibrary();
+}
+function removeFromList(ids) {
+  const l = listOf(lib.view.type, lib.view.id); if (!l) return;
+  l.ids = l.ids.filter(i => !ids.includes(i)); lib.sel.clear(); saveBS(); renderLibrary(); updateNav();
+}
+function moveInList(i, d) {
+  const l = listOf(lib.view.type, lib.view.id), j = i + d; if (!l || j < 0 || j >= l.ids.length) return;
+  [l.ids[i], l.ids[j]] = [l.ids[j], l.ids[i]]; saveBS(); renderLibrary();
+}
+async function addSongsToView() {
+  const l = listOf(lib.view.type, lib.view.id); if (!l) return;
+  const sources = [{ label: 'All songs', ids: library.map(s => s.id) }];
+  if (lib.view.type === 'set') books.forEach(b => sources.push({ label: 'Book: ' + b.name, ids: b.ids.filter(songById) }));
+  const ids = await pickSongs('Add to “' + l.name + '” from…', sources); if (!ids || !ids.length) return;
+  let added = 0; ids.forEach(id => { if (!l.ids.includes(id)) { l.ids.push(id); added++; } });
+  if (lib.view.type === 'book') l.ids.sort((a, b) => songTitle(songById(a)).localeCompare(songTitle(songById(b))));
+  saveBS(); renderLibrary(); updateNav(); toast('Added ' + added);
+}
+
+/* --- the library screen --- */
+function openLib() { lib.open = true; $('libScreen').style.display = 'flex'; closePanel(); renderLibrary(); }
+function closeLib() { lib.open = false; $('libScreen').style.display = 'none'; }
+function setTab(t) { try { localStorage.setItem('sv.tab', t); } catch (e) {} lib.tab = t; lib.view = null; lib.sel.clear(); lib.q = ''; renderLibrary(); }
+
+function songRows(ids, context, reorder) {
+  const q = lib.q.trim().toLowerCase(), frag = document.createDocumentFragment();
+  ids.forEach((id, i) => {
+    const s = songById(id); if (!s) return;
+    if (q && !songTitle(s).toLowerCase().includes(q)) return;
+    const r = mk('div', 'lrow');
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = lib.sel.has(id);
+    cb.onchange = () => { cb.checked ? lib.sel.add(id) : lib.sel.delete(id); renderActions(); };
+    const name = btn(songTitle(s), () => { ctx = context; selectSong(id); closeLib(); }, 'lname');
+    if (id === curId) name.classList.add('cur');
+    r.append(cb, name);
+    if (reorder) r.append(btn('▲', () => moveInList(i, -1), 'mv'), btn('▼', () => moveInList(i, 1), 'mv'));
+    frag.appendChild(r);
+  });
+  if (!frag.children.length) frag.appendChild(mk('p', 'info', ids.length ? 'No matches.' : 'Nothing here yet.'));
+  return frag;
+}
+function collectionRows(type) {
+  const coll = type === 'book' ? books : sets, frag = document.createDocumentFragment();
+  coll.forEach(l => {
+    const r = mk('div', 'lrow');
+    r.append(btn(l.name + '   ·   ' + l.ids.filter(songById).length + ' songs', () => { lib.view = { type, id: l.id }; lib.sel.clear(); lib.q = ''; renderLibrary(); }, 'lname'),
+      btn('✕', () => deleteList(type, l.id), 'mv del'));
+    frag.appendChild(r);
+  });
+  if (!coll.length) frag.appendChild(mk('p', 'info', type === 'book'
+    ? 'No books yet. Create one here, or select songs in the Songs tab and choose “Add to Book…”.'
+    : 'No sets yet. Create one here, or select songs in Songs or in a Book and choose “Add to Set…”.'));
+  return frag;
+}
+
+function renderLibrary() {
+  if (!lib.open) return;
+  document.querySelectorAll('#libTabs button').forEach(b => b.classList.toggle('sel', b.dataset.tab === lib.tab));
+  if (lib.view && !listOf(lib.view.type, lib.view.id)) lib.view = null;
+  const body = $('libBody'), sub = $('libSub'); body.replaceChildren(); sub.replaceChildren();
+  const search = () => {
+    const i = document.createElement('input'); i.type = 'search'; i.placeholder = 'Search'; i.value = lib.q;
+    i.oninput = () => { lib.q = i.value; const pos = i.selectionStart; renderBodyOnly(); };
+    return i;
+  };
+  const renderBodyOnly = () => {                       // keep the search box focused while typing
+    body.replaceChildren(buildBody()); renderActions();
+  };
+  const buildBody = () => {
+    if (lib.tab === 'songs') return songRows(library.map(s => s.id), { type: 'songs' }, false);
+    if (!lib.view) return collectionRows(lib.tab === 'books' ? 'book' : 'set');
+    const l = listOf(lib.view.type, lib.view.id);
+    return songRows(l.ids, { type: lib.view.type, id: l.id }, lib.view.type === 'set');
+  };
+
+  if (lib.tab === 'songs') {
+    sub.append(mk('div', 'ltitle', 'Songs (' + library.length + ')'), search(),
+      btn('Select all', () => { const q = lib.q.trim().toLowerCase(); library.forEach(s => { if (!q || songTitle(s).toLowerCase().includes(q)) lib.sel.add(s.id); }); renderLibrary(); }),
+      btn('None', () => { lib.sel.clear(); renderLibrary(); }));
+  } else if (!lib.view) {
+    sub.append(mk('div', 'ltitle', lib.tab === 'books' ? 'Books' : 'Sets'));
+  } else {
+    const l = listOf(lib.view.type, lib.view.id);
+    sub.append(btn('‹ Back', () => { lib.view = null; lib.sel.clear(); lib.q = ''; renderLibrary(); }),
+      mk('div', 'ltitle', l.name + ' (' + l.ids.filter(songById).length + ')'), search(),
+      btn('Select all', () => { l.ids.forEach(id => lib.sel.add(id)); renderLibrary(); }),
+      btn('Rename', renameList));
+  }
+  body.appendChild(buildBody());
+  renderActions();
+}
+
+function renderActions() {
+  const bar = $('libActions'); bar.replaceChildren();
+  const ids = [...lib.sel], n = ids.length, none = n === 0;
+  const dis = b => { b.disabled = none; return b; };
+  if (lib.tab === 'songs') {
+    bar.append(btn('Add to Book…', () => addToList('book', ids)), btn('Add to Set…', () => addToList('set', ids)), btn('Delete', () => deleteSongs(ids), 'danger'));
+    [...bar.children].forEach(dis);
+  } else if (!lib.view) {
+    bar.appendChild(btn('＋ New ' + (lib.tab === 'books' ? 'book' : 'set'), () => newList(lib.tab === 'books' ? 'book' : 'set'), 'primary'));
+  } else {
+    bar.appendChild(btn('＋ Add songs…', addSongsToView, 'primary'));
+    if (lib.view.type === 'book') bar.appendChild(dis(btn('Add to Set…', () => addToList('set', ids))));
+    bar.appendChild(dis(btn('Remove from ' + lib.view.type, () => removeFromList(ids), 'danger')));
+  }
+  if (n) bar.appendChild(mk('span', 'info', n + ' selected'));
 }
 
 /* ---------- UI wiring ---------- */
 function openPanel() { document.body.classList.add('open'); }
 function closePanel() { document.body.classList.remove('open'); }
-function setSize(px) { document.documentElement.style.setProperty('--fs', px + 'px'); $('size').value = px; if (!autofit) build(); try { localStorage.setItem('sv.fs', px); } catch (e) {} }
-function setLH(v) { document.documentElement.style.setProperty('--lh', v); $('lh').value = v; try { localStorage.setItem('sv.lh', v); } catch (e) {} fit(); }
 let joinMode = true;
-function setJoin(on) {
-  joinMode = on;
-  $('toggleJoin').textContent = 'Join short lines: ' + (on ? 'on' : 'off');
-  $('toggleJoin').classList.toggle('primary', on);
-  try { localStorage.setItem('sv.join', on ? '1' : '0'); } catch (e) {}
-  render();
-}
 function onResize() { if (autofit) fit(); else build(); }
 let autofit = false;
 function fit() {
@@ -448,60 +734,118 @@ function fit() {
   $('size').value = Math.round(lo);
   window.scrollTo(0, 0);
 }
-function setFit(on) {
+/* ---------- Per-song display settings ---------- */
+const DEF0 = { fs: 26, lh: 1, fit: false, join: true, nochords: false };
+let defaults = { ...DEF0 };       // used by songs that have no settings of their own
+let prefs = {};                   // { songId: { fs, lh, fit, join, nochords } } - only what you changed for that song
+const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+function loadPrefs() {
+  try { prefs = JSON.parse(lsGet('sv.prefs') || '{}') || {}; } catch (e) { prefs = {}; }
+  try {
+    const d = JSON.parse(lsGet('sv.def') || 'null');
+    if (d) defaults = { ...DEF0, ...d };
+    else defaults = {              // first run after upgrading: start from the old global values
+      fs: +lsGet('sv.fs') || DEF0.fs, lh: +lsGet('sv.lh') || DEF0.lh,
+      fit: lsGet('sv.fit') === '1', join: lsGet('sv.join') !== '0', nochords: lsGet('sv.nochords') === '1' };
+  } catch (e) {}
+}
+const savePrefs = () => lsSet('sv.prefs', JSON.stringify(prefs));
+const eff = k => (prefs[curId] && prefs[curId][k] !== undefined) ? prefs[curId][k] : defaults[k];
+function remember(k, v) { if (curId) { (prefs[curId] = prefs[curId] || {})[k] = v; savePrefs(); } updatePrefNote(); }
+function updatePrefNote() {
+  $('prefNote').textContent = curId && prefs[curId] && Object.keys(prefs[curId]).length
+    ? 'These settings are saved for this song.' : 'This song uses the default settings.';
+}
+const refresh = () => { build(); fit(); };
+
+function applySize(px) { document.documentElement.style.setProperty('--fs', px + 'px'); $('size').value = px; }
+function applyLH(v) { document.documentElement.style.setProperty('--lh', v); $('lh').value = v; }
+function applyJoin(on) {
+  joinMode = on;
+  $('toggleJoin').textContent = 'Join short lines: ' + (on ? 'on' : 'off');
+  $('toggleJoin').classList.toggle('primary', on);
+}
+function applyFit(on) {
   autofit = on;
   document.body.classList.toggle('fit', on);
   $('size').disabled = on;
   $('toggleFit').textContent = 'Auto-fit to screen: ' + (on ? 'on' : 'off');
   $('toggleFit').classList.toggle('primary', on);
-  try { localStorage.setItem('sv.fit', on ? '1' : '0'); } catch (e) {}
-  if (on) fit(); else { const fs = +localStorage.getItem('sv.fs') || 26; setSize(fs); }
 }
-function toggleChords(force) {
-  const off = force === true ? true : !document.body.classList.contains('nochords');
+function applyChords(off) {
   document.body.classList.toggle('nochords', off);
   $('toggleChords').textContent = off ? 'Show chords' : 'Hide chords';
-  try { localStorage.setItem('sv.nochords', off ? '1' : '0'); } catch (e) {}
-  build(); fit();
 }
-let wakeLock = null;
-async function toggleWake() {
-  try {
-    if (wakeLock) { await wakeLock.release(); wakeLock = null; $('toggleWake').textContent = 'Screen: normal'; }
-    else { wakeLock = await navigator.wakeLock.request('screen'); $('toggleWake').textContent = 'Screen: stay on';
-      wakeLock.addEventListener('release', () => { wakeLock = null; $('toggleWake').textContent = 'Screen: normal'; }); }
-  } catch (e) { $('toggleWake').textContent = 'Not supported'; }
+function applyPrefs() {            // switch the whole display to the open song's settings
+  applySize(eff('fs')); applyLH(eff('lh')); applyJoin(eff('join')); applyFit(eff('fit')); applyChords(eff('nochords'));
+  updatePrefNote();
 }
-document.addEventListener('visibilitychange', async () => {   // re-acquire after returning to the app
-  if (document.visibilityState === 'visible' && $('toggleWake').textContent === 'Screen: stay on' && !wakeLock) { wakeLock = null; toggleWake(); }
-});
+function setSize(px) { applySize(px); remember('fs', px); refresh(); }
+function setLH(v) { applyLH(v); remember('lh', v); refresh(); }
+function setJoin(on) { applyJoin(on); remember('join', on); refresh(); }
+function setFit(on) { if (!on) applySize(eff('fs')); applyFit(on); remember('fit', on); refresh(); }
+function toggleChords() { const off = !document.body.classList.contains('nochords'); applyChords(off); remember('nochords', off); refresh(); }
+function saveDefaults() {
+  defaults = { fs: eff('fs'), lh: eff('lh'), fit: eff('fit'), join: eff('join'), nochords: eff('nochords') };
+  lsSet('sv.def', JSON.stringify(defaults)); toast('Saved as the default for songs without their own settings');
+}
+function resetSongPrefs() {
+  if (curId) { delete prefs[curId]; savePrefs(); }
+  applyPrefs(); refresh(); toast('This song is back to the default settings');
+}
+let wakeLock = null, wakeWanted = false;
+const wakeOk = () => 'wakeLock' in navigator;
+function wakeLabel() { $('toggleWake').textContent = !wakeOk() ? 'Screen: not supported' : 'Screen: ' + (wakeWanted ? 'stay on' : 'normal'); }
+async function acquireWake() {
+  if (!wakeWanted || wakeLock || !wakeOk() || document.visibilityState !== 'visible') return;
+  try { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { wakeLock = null; }); } catch (e) { /* retried on the next tap or when the app is shown again */ }
+}
+async function setWake(on) {
+  wakeWanted = on && wakeOk();
+  try { localStorage.setItem('sv.wake', on ? '1' : '0'); } catch (e) {}
+  wakeLabel();
+  if (wakeWanted) await acquireWake();
+  else if (wakeLock) { try { await wakeLock.release(); } catch (e) {} wakeLock = null; }
+}
+document.addEventListener('visibilitychange', acquireWake);        // re-acquire after returning to the app
+document.addEventListener('pointerdown', acquireWake, { passive: true });
 
 $('hot').addEventListener('click', () => document.body.classList.contains('open') ? closePanel() : openPanel());
 $('scrim').addEventListener('click', closePanel);
 $('size').addEventListener('input', e => setSize(+e.target.value));
 $('lh').addEventListener('input', e => setLH(+e.target.value));
 $('toggleChords').onclick = () => toggleChords();
+$('saveDef').onclick = saveDefaults; $('resetSong').onclick = resetSongPrefs;
 $('toggleJoin').onclick = () => setJoin(!joinMode);
 $('toggleFit').onclick = () => setFit(!autofit);
 window.addEventListener('resize', onResize);
-$('toggleWake').onclick = toggleWake;
+$('toggleWake').onclick = () => setWake(!wakeWanted);
 $('up').onclick = () => setShift(shift + 1);
 $('down').onclick = () => setShift(shift - 1);
 $('reset').onclick = () => setShift(0);
 const pick = () => $('file').click();
-$('openBtn').onclick = pick; $('openBtn0').onclick = pick;
+$('openBtn0').onclick = pick; $('libAdd').onclick = pick;
+$('openLib').onclick = openLib; $('openLib0').onclick = openLib; $('libClose').onclick = closeLib;
+document.querySelectorAll('#libTabs button').forEach(b => { b.onclick = () => setTab(b.dataset.tab); });
+$('prevSong').onclick = () => stepSong(-1); $('nextSong').onclick = () => stepSong(1);
 $('file').addEventListener('change', async e => { await addFiles([...e.target.files]); e.target.value = ''; });
 // hardware keyboard / Bluetooth pedal friendly: arrows change key, Escape closes
 document.addEventListener('keydown', e => {
+  if (/^(INPUT|SELECT|TEXTAREA)$/.test((document.activeElement || {}).tagName) && document.activeElement.type !== 'checkbox') return;
+  if (lib.open) { if (e.key === 'Escape') closeLib(); return; }
   if (e.key === 'Escape') closePanel();
+  else if (e.key === 'ArrowRight' || e.key === 'PageDown') { stepSong(1); e.preventDefault(); }
+  else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { stepSong(-1); e.preventDefault(); }
   else if (e.key === 'ArrowUp' && e.shiftKey) setShift(shift + 1);
   else if (e.key === 'ArrowDown' && e.shiftKey) setShift(shift - 1);
 });
 
-loadLib(); renderList();
-if (localStorage.getItem('sv.join') === '0') setJoin(false);
-if (localStorage.getItem('sv.fit') === '1') setFit(true);
-if (curId && library.some(s => s.id === curId)) selectSong(curId); else if (library[0]) selectSong(library[0].id); else render();
+loadLib(); loadBS(); loadPrefs();
+try { const t = localStorage.getItem('sv.tab'); if (t === 'songs' || t === 'books' || t === 'sets') lib.tab = t; } catch (e) {}
+if (localStorage.getItem('sv.wake') === '1') setWake(true); else wakeLabel();
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});   // ask iOS/Chrome not to evict saved songs & settings
+if (curId && library.some(s => s.id === curId)) selectSong(curId); else if (library[0]) selectSong(library[0].id); else { applyPrefs(); render(); }
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
