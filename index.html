@@ -959,7 +959,13 @@ function backupDialog() {
     box.appendChild(btn('Close', () => close()));
   });
 }
+/* The ChordClean Mac app hosts this page in a native window and provides window.webkit.messageHandlers.host. In a browser or on the iPad HOST is null and nothing here is used. */
+const HOST = (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.host) || null;
 async function shareFile(name, data, type = 'application/json') {   // the share sheet (AirDrop, Messages, Files, Print...) or, elsewhere, a plain download
+  if (HOST) {                                                      // inside the Mac app: a native Save panel
+    try { return (await HOST.postMessage({ type: 'saveFile', name, mime: type, b64: b64(typeof data === 'string' ? new TextEncoder().encode(data) : data) })) === true; }
+    catch (e) { toast('Could not save: ' + e.message); return false; }
+  }
   const file = new File([data], name, { type });
   try {
     if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: name });
@@ -1190,7 +1196,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v16 · 11 Nov 15:09';   // bump on every commit
+const APP_VERSION = 'v17 · 11 Nov 15:27';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
@@ -1220,7 +1226,9 @@ async function mirrorNow() {
   try {
     const data = svKeys();
     if (!('sv.lib' in data)) return;                 // never replace the safety copy with an empty store
-    const ts = Date.now(); await idbPut('state', { ts, data }); _lsSet.call(localStorage, 'sv.ts', String(ts)); mirrorOk = true;
+    const ts = Date.now();
+    if (HOST) { _lsSet.call(localStorage, 'sv.ts', String(ts)); HOST.postMessage({ type: 'save', data: { ...data, 'sv.ts': String(ts) } }).catch(() => {}); mirrorOk = true; return; }
+    await idbPut('state', { ts, data }); _lsSet.call(localStorage, 'sv.ts', String(ts)); mirrorOk = true;
   } catch (e) { mirrorOk = false; }
 }
 const scheduleMirror = () => { if (!mirrorTimer) mirrorTimer = setTimeout(mirrorNow, 400); };
@@ -1255,6 +1263,7 @@ async function storageStatus() {
 const EMBEDDED = window.top !== window.self || /[?&]embedded=1/.test(location.search);
 const isDesktop = () => matchMedia('(pointer:fine) and (hover:hover)').matches;
 const SONG_EXT = /\.(txt|text|cho|crd|chopro|pro|onsong)$/i;
+const DOC_EXT = /\.(docx?|rtf|odt|pdf|html?|webarchive)$/i;      // documents the Mac app can clean
 async function filesFromDrop(dt) {                        // walks dropped folders as well as plain files
   const entries = [...(dt.items || [])].map(i => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null)).filter(Boolean);
   if (!entries.length) return [...(dt.files || [])];
@@ -1272,7 +1281,13 @@ async function filesFromDrop(dt) {                        // walks dropped folde
 async function handleFiles(files) {                       // songs go to the library, a backup file goes to Import
   const songs = files.filter(f => SONG_EXT.test(f.name) || f.type === 'text/plain');
   const backups = files.filter(f => /\.json$/i.test(f.name));
-  const skipped = files.length - songs.length - backups.length;
+  const docs = HOST ? files.filter(f => DOC_EXT.test(f.name) && !songs.includes(f)) : [];       // Word/RTF/PDF: the Mac app cleans them
+  const skipped = files.length - songs.length - backups.length - docs.length;
+  if (docs.length) {
+    toast('Cleaning ' + docs.length + ' document' + (docs.length === 1 ? '' : 's') + '…');
+    const payload = []; for (const f of docs) payload.push({ name: f.name, b64: b64(new Uint8Array(await f.arrayBuffer())) });
+    try { await HOST.postMessage({ type: 'convert', files: payload }); } catch (e) { toast('Could not clean: ' + e.message); }
+  }
   if (backups.length) await importBackupFile(backups[0]);
   if (songs.length) { const n = await addFiles(songs); if (skipped > 0) toast('Added ' + n + ' song' + (n === 1 ? '' : 's') + ' (skipped ' + skipped + ' other file' + (skipped === 1 ? '' : 's') + ')'); }
   else if (!backups.length) toast('No song files found (looking for .txt)');
@@ -1802,11 +1817,22 @@ async function initApp() {
   try { if (!localStorage.getItem('sv.hint2')) { localStorage.setItem('sv.hint2', '1'); setTimeout(() => toast('Tap near the top for controls; swipe up to close them'), 600); } } catch (e) {}
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});   // ask iOS/Chrome not to evict saved songs & settings
   if (curId && library.some(s => s.id === curId)) selectSong(curId); else if (library[0]) selectSong(library[0].id); else { applyPrefs(); render(); }
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (!HOST && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   if (restored) setTimeout(() => toast('Restored your songs and settings from the safety copy'), 900);
   scheduleMirror(); storageStatus();
+  if (HOST) HOST.postMessage({ type: 'ready' }).catch(() => {});
 }
 initApp();
+window.svHost = {                                          // called by the Mac app (ChordClean)
+  addSongs: async list => { await handleFiles((list || []).map(x => new File([x.text], x.name, { type: 'text/plain' }))); },
+  importBackup: async o => { await importBackupFile(new File([o.text], o.name, { type: 'application/json' })); },
+  exportBackup: () => exportBackup(),
+  openLibrary: () => openLib(),
+  flush: () => mirrorNow(),
+  dropFile: async o => { await handleFiles([new File([Uint8Array.from(atob(o.b64), c => c.charCodeAt(0))], o.name)]); },
+  probe: () => ({ songs: library.length, sets: sets.length, books: books.length, version: APP_VERSION, host: !!HOST, names: library.slice(0, 40).map(x => x.name) })
+};
+window.svHostCall = window.svHostCall || ((fn, arg) => window.svHost[fn](arg));
 </script>
 </body>
 </html>

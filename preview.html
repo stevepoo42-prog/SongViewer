@@ -52,7 +52,9 @@ const get = (k, d) => { try { return localStorage.getItem(k) || d; } catch (e) {
 const set = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
 
 // Only meaningful on a computer; phones and iPads just open the app itself.
-const desktop = matchMedia('(pointer:fine) and (hover:hover)').matches && innerWidth >= 900;
+const hosted = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.host);   // inside the ChordClean Mac app
+const desktop = hosted || (matchMedia('(pointer:fine) and (hover:hover)').matches && innerWidth >= 900);
+window.svHostCall = (fn, arg) => $('app').contentWindow.svHost[fn](arg);
 if (!desktop) location.replace('index.html?full=1');
 
 set('sv.frame', 'on');                                   // opening this page means: use the iPad frame
