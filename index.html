@@ -28,6 +28,7 @@
   .line.chords { color:var(--chord); font-weight:700; }
   .row2 { margin-top:.3em; }
   .row2.cont { margin-top:.05em; }
+  .line .tc { color:var(--chord); font-weight:700; }
   .line.section + .row2, .line.blank + .row2 { margin-top:0; }
   .sec-intro { color:#b794ff; } .sec-verse { color:#6cc4ff; } .sec-chorus { color:#5ee07a; }
   .sec-bridge { color:#ff7ad9; } .sec-solo { color:#4fe3d5; } .sec-outro { color:#ff8a7a; }
@@ -216,6 +217,21 @@ function transposeChord(tok, shift, flats) {
 const SECTION_RE = /^\s*[\[(]?\s*(intro|verse|chorus|pre[- ]?chorus|bridge|outro|tag|instrumental|solo|interlude|refrain|ending|turnaround|coda|vamp|break)(?![a-z])[^\]\)]*[\])]?\s*:?\s*$/i;
 const KEYLINE_RE = /^\s*(?:key\s*(?:of)?\s*[:\-]?\s*)([A-G][#b]?)(m(?!aj)(?:in)?)?\s*$/i;
 
+// "Word-document" style: the lyric comes first and its chords follow at the end of the same line, in brackets,
+// separated by commas, dashes, dots or spaces:  "lonely as a train [C], [C], [F], [F]".
+const SEP_ONLY = /^[\s,.\-–—_…]*$/;
+function splitTrail(line) {
+  const re = /\[([^\]]*)\]/g, br = []; let m;
+  while ((m = re.exec(line))) br.push({ i: m.index, e: m.index + m[0].length, chord: CHORD_RE.test(m[1]) });
+  const ch = br.filter(b => b.chord);
+  if (!ch.length) return null;
+  if (!SEP_ONLY.test(line.slice(ch[ch.length - 1].e))) return null;               // text after the last chord: not this style
+  let k = ch.length - 1;                                                          // grow the group backwards over separators only
+  while (k > 0 && SEP_ONLY.test(line.slice(ch[k - 1].e, ch[k].i))) k--;
+  const start = ch[k].i;
+  if (ch.some(b => b.i < start)) return null;                                     // chords earlier in the line: embedded (ChordPro) style
+  return { lead: line.slice(0, start), cl: line.slice(start) };
+}
 function isChordLine(line) {
   const toks = line.replace(/[\[\]]/g, ' ').trim().split(/\s+/).filter(Boolean);
   if (!toks.length) return false;
@@ -255,6 +271,8 @@ function parseSong(name, text) {
     const cp = /^\s*capo\s*(?:on\s*)?(.*?)[\s*]*$/i.exec(line);
     if (cp && !song.capo) { song.capo = ('Capo ' + cp[1]).trim(); continue; }
 
+    const tr = splitTrail(line);
+    if (tr && !isChordLine(line)) { song.lines.push({ t: 'trail', lead: tr.lead, cl: tr.cl }); continue; }
     if (SECTION_RE.test(line)) { song.lines.push({ t: 'section', s: line.replace(/[\[\]():]/g, '').trim().replace(/([a-z])(\d)/i, '$1 $2') }); continue; }
 
     if (isChordLine(line)) { song.lines.push({ t: 'chords', s: line.replace(/\[([^\]]*)\]/g, (m, c) => c + '  ').replace(/\s+$/, '') }); continue; }
@@ -283,7 +301,8 @@ function parseSong(name, text) {
       let first = null;
       if (l.t === 'chords') first = l.s.trim().split(/\s+/).map(t => t.replace(/\*+$/, '')).find(t => CHORD_RE.test(t));
       else if (l.t === 'inline') { const s = l.segs.find(s => s.c); first = s && s.c; }
-      if (first) { const m = CHORD_RE.exec(first); song.key = m[1] + m[2]; song.minor = /^m(?!aj)|^-/.test(m[3]); break; }
+      else if (l.t === 'trail') { const mm = /\[([A-G][^\]]*)\]/.exec(l.cl); first = mm && mm[1]; }
+      if (first && CHORD_RE.test(first)) { const m = CHORD_RE.exec(first); song.key = m[1] + m[2]; song.minor = /^m(?!aj)|^-/.test(m[3]); break; }
     }
   }
   if (!song.key) song.key = 'C';
@@ -322,6 +341,28 @@ function transposeChordLine(s, sh, flats) {
 
 /* ---------- Wrapping long lines onto a continuation line starting with " - " ---------- */
 const PFX = ' - ';
+function splitWords(L, firstMax, nextMax) {
+  const segs = []; let start = 0;
+  while (start < L.length) {
+    const lim = Math.max(4, segs.length ? nextMax : firstMax);
+    let end = start + lim;
+    if (end >= L.length) end = L.length; else { let sp = L.lastIndexOf(' ', end); if (sp <= start) sp = end; end = sp; }
+    segs.push({ a: start, b: end });
+    start = end; while (start < L.length && L[start] === ' ') start++;
+  }
+  return segs;
+}
+function wrapTrail(lead, cl, max) {                  // lyric + its chords at the end; chords stay together on the last line
+  const L = lead.replace(/\s+$/, '');
+  if (!wrapOn || max < 24 || L.length + (L && cl ? 1 : 0) + cl.length <= max) return [{ s: cl ? lead : L, cl }];
+  const out = splitWords(L, max, max - PFX.length).map((g, i) => ({ s: (i ? PFX : '') + L.slice(g.a, g.b), cl: '' }));
+  if (!cl) return out;
+  const last = out[out.length - 1];
+  if (last && cl.length <= max - last.s.length - 1) { last.s += ' '; last.cl = cl; return out; }
+  const pieces = splitWords(cl.trim(), max - (last ? PFX.length : 0), max - PFX.length);
+  pieces.forEach((g, i) => out.push({ s: (last || i) ? PFX : '', cl: cl.trim().slice(g.a, g.b) }));
+  return out;
+}
 function wrapUnit(u, max, showCh) {
   const L = (u.s || '').replace(/\s+$/, ''), C = (u.c || '').replace(/\s+$/, '');
   const plain = [{ c: u.c, s: L, cont: false }];
@@ -394,6 +435,7 @@ function build() {
     if (l.t === 'blank' || l.t === 'section') { flushPend(); items.push({ k: l.t, s: l.s }); }
     else if (l.t === 'chords') { flushPend(); pend = transposeChordLine(l.s, shift, flats); }
     else if (l.t === 'lyric') { items.push({ k: 'unit', t: 'lyric', c: pend, s: l.s }); pend = null; }
+    else if (l.t === 'trail') { flushPend(); items.push({ k: 'unit', t: 'trail', lead: l.lead, cl: l.cl.replace(/\[([^\]]*)\]/g, (m, c) => CHORD_RE.test(c) ? '[' + transposeChord(c, shift, flats) + ']' : m) }); }
     else { items.push({ k: 'unit', t: 'inline', segs: l.segs.map(g => ({ c: g.c ? transposeChord(g.c, shift, flats) : '', l: g.l })) }); pend = null; }
   }
   flushPend();
@@ -439,6 +481,16 @@ function build() {
 
   // pass 2: emit, joining pairs greedily within each block
   const emit = u => {
+    if (u.t === 'trail') {
+      wrapTrail(u.lead, showCh ? u.cl : '', maxCols).forEach((ln, i) => {
+        if (!ln.s.trim() && !ln.cl) return;
+        const r2 = el('row2' + (i ? ' cont' : '') + (cur ? ' sec-' + cur : '')), un2 = el('unit'), d = el('line');
+        if (ln.s) d.appendChild(document.createTextNode(ln.s));
+        if (ln.cl) { const sp = document.createElement('span'); sp.className = 'tc'; sp.textContent = ln.cl; d.appendChild(sp); }
+        un2.appendChild(d); r2.appendChild(un2); frag.appendChild(r2);
+      });
+      return;
+    }
     const row = el('row2' + (cur ? ' sec-' + cur : '')), unit = el('unit');
     if (u.t === 'inline') {
       const d = el('line inline');
@@ -993,7 +1045,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v11 · 11 Nov 13:51';   // bump on every commit
+const APP_VERSION = 'v12 · 11 Nov 14:01';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
