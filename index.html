@@ -84,6 +84,8 @@
   #libSub input[type=search] { font:inherit; padding:10px 12px; border-radius:10px; border:0; background:var(--btn); color:var(--fg); min-width:160px; }
   #libBody { flex:1; overflow-y:auto; padding:0 14px 10px; }
   #libActions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; padding:10px 14px calc(env(safe-area-inset-bottom) + 10px); background:var(--panel); }
+  button.warn { outline:2px solid var(--chord); outline-offset:-2px; }
+  .dbox .info { white-space:pre-line; }
   button:disabled { opacity:.35; } button.danger { color:#ff6b6b; }
   .lrow { display:flex; align-items:center; gap:10px; min-height:54px; border-bottom:1px solid #222; }
   .lrow input[type=checkbox] { width:26px; height:26px; flex:none; }
@@ -114,6 +116,7 @@
   <div id="libHead">
     <button id="libClose">Done</button>
     <div id="libTabs"><button data-tab="songs">Songs</button><button data-tab="books">Books</button><button data-tab="sets">Sets</button></div>
+    <button id="libBackup">Backup</button>
     <button class="primary" id="libAdd">＋ Add files</button>
   </div>
   <div id="libSub"></div>
@@ -156,6 +159,7 @@
   </div>
 </aside>
 
+<input id="importFile" type="file" accept=".json,application/json" hidden>
 <input id="file" type="file" accept=".txt,.text,.cho,.crd,.chopro,.pro,.onsong,text/plain" multiple hidden>
 
 <script>
@@ -662,6 +666,7 @@ function collectionRows(type) {
 
 function renderLibrary() {
   if (!lib.open) return;
+  updateBackupBtn();
   document.querySelectorAll('#libTabs button').forEach(b => b.classList.toggle('sel', b.dataset.tab === lib.tab));
   if (lib.view && !listOf(lib.view.type, lib.view.id)) lib.view = null;
   const body = $('libBody'), sub = $('libSub'); body.replaceChildren(); sub.replaceChildren();
@@ -712,6 +717,92 @@ function renderActions() {
     bar.appendChild(dis(btn('Remove from ' + lib.view.type, () => removeFromList(ids), 'danger')));
   }
   if (n) bar.appendChild(mk('span', 'info', n + ' selected'));
+}
+
+/* ---------- Backup & restore ---------- */
+const BACKUP_DAYS = 30;
+function updateBackupBtn() {
+  const t = +lsGet('sv.lastBackup') || 0;
+  $('libBackup').classList.toggle('warn', library.length > 0 && (!t || Date.now() - t > BACKUP_DAYS * 864e5));
+}
+function makeBackup() {
+  return { app: 'SongViewer', version: 1, exported: new Date().toISOString(), library, books, sets, prefs, defaults };
+}
+function backupDialog() {
+  dialog((box, close) => {
+    const t = +lsGet('sv.lastBackup') || 0;
+    box.appendChild(mk('h3', '', 'Backup & restore'));
+    box.appendChild(mk('p', 'info', 'Last backup: ' + (t ? new Date(t).toLocaleString() : 'never') +
+      '\nIn the app now: ' + library.length + ' songs, ' + books.length + ' books, ' + sets.length + ' sets'));
+    box.appendChild(btn('Export backup…', () => { close(); exportBackup(); }, 'primary'));
+    box.appendChild(btn('Import backup…', () => { close(); $('importFile').click(); }));
+    box.appendChild(mk('p', 'info', 'Save the exported file to iCloud Drive (or AirDrop it). Import can merge it into another iPad’s library, which is also how to copy a set to a bandmate.'));
+    box.appendChild(btn('Close', () => close()));
+  });
+}
+async function exportBackup() {
+  const name = 'SongViewer-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+  const file = new File([JSON.stringify(makeBackup())], name, { type: 'application/json' });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: name });
+    else {                                           // browsers without file sharing: plain download
+      const url = URL.createObjectURL(file), a = document.createElement('a');
+      a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    }
+    lsSet('sv.lastBackup', String(Date.now())); updateBackupBtn(); toast('Backup exported');
+  } catch (e) { if (e.name !== 'AbortError') toast('Could not export: ' + e.message); }
+}
+const validSong = s => s && typeof s.id === 'string' && typeof s.name === 'string' && typeof s.text === 'string';
+function saveAll() { saveLib(); saveBS(); savePrefs(); lsSet('sv.def', JSON.stringify(defaults)); }
+function afterImport(msg) {
+  saveAll(); lib.view = null; lib.sel.clear();
+  if (curSong && songById(curId)) updateNav();
+  else { curId = library[0] ? library[0].id : null; curSong = null; ctx = null; if (curId) selectSong(curId); else { applyPrefs(); render(); updateNav(); } }
+  renderLibrary(); updateBackupBtn(); toast(msg);
+}
+function applyReplace(b) {
+  library = b.library.filter(validSong).map(s => ({ id: s.id, name: s.name, text: s.text, shift: s.shift || 0 }));
+  const ok = new Set(library.map(s => s.id));
+  const clean = c => (Array.isArray(c) ? c : []).filter(x => x && x.name).map(x => ({ id: x.id || uid('l'), name: x.name, ids: (x.ids || []).filter(i => ok.has(i)) }));
+  books = clean(b.books); sets = clean(b.sets);
+  prefs = {}; Object.keys(b.prefs || {}).forEach(k => { if (ok.has(k)) prefs[k] = b.prefs[k]; });
+  if (b.defaults) defaults = { ...DEF0, ...b.defaults };
+  curSong = null; ctx = null;
+  afterImport('Restored ' + library.length + ' songs, ' + books.length + ' books, ' + sets.length + ' sets');
+}
+function applyMerge(b) {
+  const map = {}; let newSongs = 0;
+  b.library.filter(validSong).forEach(s => {
+    let ex = library.find(x => x.name === s.name);
+    if (!ex) {
+      ex = { id: songById(s.id) ? uid('s') : s.id, name: s.name, text: s.text, shift: s.shift || 0 };
+      library.push(ex); newSongs++;
+      if (b.prefs && b.prefs[s.id]) prefs[ex.id] = { ...b.prefs[s.id] };
+    }
+    map[s.id] = ex.id;
+  });
+  library.sort((x, y) => x.name.localeCompare(y.name));
+  let newLists = 0;
+  const mergeColl = (dst, src, pre) => (Array.isArray(src) ? src : []).forEach(c => {
+    if (!c || !c.name) return;
+    let t = dst.find(x => x.name === c.name);
+    if (!t) { t = { id: dst.some(x => x.id === c.id) || !c.id ? uid(pre) : c.id, name: c.name, ids: [] }; dst.push(t); newLists++; }
+    (c.ids || []).map(i => map[i]).filter(Boolean).forEach(i => { if (!t.ids.includes(i)) t.ids.push(i); });
+  });
+  mergeColl(books, b.books, 'b'); mergeColl(sets, b.sets, 's');
+  afterImport('Merged: ' + newSongs + ' new songs, ' + newLists + ' new books/sets');
+}
+async function importBackupFile(f) {
+  let b;
+  try { b = JSON.parse(await f.text()); } catch (e) { toast('That file isn’t a SongViewer backup'); return; }
+  if (!b || b.app !== 'SongViewer' || !Array.isArray(b.library)) { toast('That file isn’t a SongViewer backup'); return; }
+  const n = b.library.filter(validSong).length;
+  const choice = await choose('Backup from ' + (b.exported ? new Date(b.exported).toLocaleDateString() : 'unknown date') +
+    ': ' + n + ' songs, ' + (b.books || []).length + ' books, ' + (b.sets || []).length + ' sets',
+    [{ id: 'merge', label: 'Merge into what’s here (keeps your current songs)' }, { id: 'replace', label: 'Replace everything on this iPad' }]);
+  if (choice === 'merge') applyMerge(b);
+  else if (choice === 'replace' && await askConfirm('Replace ALL songs, books, sets and settings on this iPad with this backup?', 'Replace')) applyReplace(b);
 }
 
 /* ---------- UI wiring ---------- */
@@ -826,6 +917,8 @@ $('down').onclick = () => setShift(shift - 1);
 $('reset').onclick = () => setShift(0);
 const pick = () => $('file').click();
 $('openBtn0').onclick = pick; $('libAdd').onclick = pick;
+$('libBackup').onclick = backupDialog;
+$('importFile').addEventListener('change', async e => { const f = e.target.files[0]; e.target.value = ''; if (f) await importBackupFile(f); });
 $('openLib').onclick = openLib; $('openLib0').onclick = openLib; $('libClose').onclick = closeLib;
 document.querySelectorAll('#libTabs button').forEach(b => { b.onclick = () => setTab(b.dataset.tab); });
 $('prevSong').onclick = () => stepSong(-1); $('nextSong').onclick = () => stepSong(1);
