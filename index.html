@@ -8,6 +8,15 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Songs">
 <meta name="theme-color" content="#000000">
+<script>
+(function () {
+  try {
+    var inFrame = window.top !== window.self || /[?&](embedded|full)=1/.test(location.search);
+    var desktop = matchMedia('(pointer:fine) and (hover:hover)').matches && innerWidth >= 900;
+    if (!inFrame && desktop && localStorage.getItem('sv.frame') !== 'off') location.replace('preview.html');
+  } catch (e) {}
+})();
+</script>
 <link rel="manifest" href="manifest.json">
 <title>Song Viewer</title>
 <style>
@@ -109,6 +118,8 @@
   .dopt { text-align:left; }
   .dtext { font:inherit; font-size:18px; padding:12px; border-radius:10px; border:0; background:var(--btn); color:var(--fg); }
   .dbox .row > * { flex:1; }
+  #drop { position:fixed; inset:0; z-index:80; display:none; align-items:center; justify-content:center; text-align:center; padding:30px;
+    background:rgba(10,132,255,.28); border:4px dashed #0a84ff; font-size:26px; font-weight:700; pointer-events:none; }
   #toast { position:fixed; left:50%; bottom:90px; transform:translateX(-50%); background:#3a3a3c; color:#fff; padding:10px 18px; border-radius:20px; z-index:70; display:none; max-width:90vw; }
   .info { color:var(--muted); font-size:14px; line-height:1.4; }
 </style>
@@ -126,6 +137,7 @@
   <div id="libHead">
     <button id="libClose">Done</button>
     <div id="libTabs"><button data-tab="songs">Songs</button><button data-tab="books">Books</button><button data-tab="sets">Sets</button></div>
+    <button id="libAddFolder" hidden>Folder…</button>
     <button id="libBackup">Backup</button>
     <button class="primary" id="libAdd">＋ Add files</button>
   </div>
@@ -134,6 +146,7 @@
   <div id="libActions"></div>
 </div>
 <div id="toast"></div>
+<div id="drop">Drop song files or a folder here<br><span style="font-size:15px;font-weight:400">.txt songs are added to Songs · a SongViewer backup (.json) can be imported</span></div>
 <div class="edge" id="edgeL" aria-label="Previous song"></div>
 <div class="edge" id="edgeR" aria-label="Next song"></div>
 <div id="ver"></div>
@@ -181,13 +194,14 @@
     <div class="info" id="navInfo" style="text-align:center"></div>
     <button id="nextSong">Next ▶</button>
   </div>
-  <div class="row" style="margin-top:14px"><button id="reloadApp">Reload latest version</button></div>
+  <div class="row" style="margin-top:14px"><button id="previewIpad" hidden>Preview as iPad (on this computer)</button><button id="reloadApp">Reload latest version</button></div>
   <p class="info" id="verInfo" style="white-space:pre-line"></p>
   </section>
 </div>
 <div id="sheetHandle" aria-label="Slide up to close"><span class="pill"></span></div>
 </aside>
 
+<input id="folderIn" type="file" webkitdirectory multiple hidden>
 <input id="importFile" type="file" accept=".json,application/json" hidden>
 <input id="file" type="file" accept=".txt,.text,.cho,.crd,.chopro,.pro,.onsong,text/plain" multiple hidden>
 
@@ -578,6 +592,7 @@ async function addFiles(files) {
   saveLib(); toast('Added ' + n + ' song' + (n === 1 ? '' : 's'));
   if (!curSong && library[0]) selectSong(library[0].id); else updateNav();
   renderLibrary();
+  return n;
 }
 
 /* ---------- Books, Sets and the library screen ---------- */
@@ -935,9 +950,9 @@ async function importBackupFile(f) {
   const n = b.library.filter(validSong).length;
   const choice = await choose('Backup from ' + (b.exported ? new Date(b.exported).toLocaleDateString() : 'unknown date') +
     ': ' + n + ' songs, ' + (b.books || []).length + ' books, ' + (b.sets || []).length + ' sets',
-    [{ id: 'merge', label: 'Merge into what’s here (keeps your current songs)' }, { id: 'replace', label: 'Replace everything on this iPad' }]);
+    [{ id: 'merge', label: 'Merge into what’s here (keeps your current songs)' }, { id: 'replace', label: 'Replace everything in this library' }]);
   if (choice === 'merge') applyMerge(b);
-  else if (choice === 'replace' && await askConfirm('Replace ALL songs, books, sets and settings on this iPad with this backup?', 'Replace')) applyReplace(b);
+  else if (choice === 'replace' && await askConfirm('Replace ALL songs, books, sets and settings in this library with this backup?', 'Replace')) applyReplace(b);
 }
 
 /* ---------- Hands-free: auto-scroll, edge taps, pedal keys ---------- */
@@ -1045,7 +1060,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v12 · 11 Nov 14:01';   // bump on every commit
+const APP_VERSION = 'v13 · 11 Nov 14:14';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
@@ -1104,6 +1119,49 @@ async function storageStatus() {
   $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.\n' +
     'Saved here: ' + library.length + ' songs, ' + withOwn + ' with their own display settings.\n' +
     'Safety copy: ' + (mirrorOk ? 'working' : 'not available') + ' · protected from clean-up: ' + persisted;
+}
+
+/* ---------- Drag & drop and folders (computers) ---------- */
+const EMBEDDED = window.top !== window.self || /[?&]embedded=1/.test(location.search);
+const isDesktop = () => matchMedia('(pointer:fine) and (hover:hover)').matches;
+const SONG_EXT = /\.(txt|text|cho|crd|chopro|pro|onsong)$/i;
+async function filesFromDrop(dt) {                        // walks dropped folders as well as plain files
+  const entries = [...(dt.items || [])].map(i => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null)).filter(Boolean);
+  if (!entries.length) return [...(dt.files || [])];
+  const out = [];
+  const walk = async e => {
+    if (e.isFile) await new Promise(res => e.file(f => { out.push(f); res(); }, () => res()));
+    else if (e.isDirectory) {
+      const rd = e.createReader(); let batch;
+      do { batch = await new Promise(res => rd.readEntries(res, () => res([]))); for (const c of batch) await walk(c); } while (batch.length);
+    }
+  };
+  for (const e of entries) await walk(e);
+  return out;
+}
+async function handleFiles(files) {                       // songs go to the library, a backup file goes to Import
+  const songs = files.filter(f => SONG_EXT.test(f.name) || f.type === 'text/plain');
+  const backups = files.filter(f => /\.json$/i.test(f.name));
+  const skipped = files.length - songs.length - backups.length;
+  if (backups.length) await importBackupFile(backups[0]);
+  if (songs.length) { const n = await addFiles(songs); if (skipped > 0) toast('Added ' + n + ' song' + (n === 1 ? '' : 's') + ' (skipped ' + skipped + ' other file' + (skipped === 1 ? '' : 's') + ')'); }
+  else if (!backups.length) toast('No song files found (looking for .txt)');
+}
+let dragDepth = 0;
+const hasFiles = e => e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
+document.addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; $('drop').style.display = 'flex'; });
+document.addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+document.addEventListener('dragleave', e => { if (!hasFiles(e)) return; if (--dragDepth <= 0) { dragDepth = 0; $('drop').style.display = 'none'; } });
+document.addEventListener('drop', async e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; $('drop').style.display = 'none';
+  handleFiles(await filesFromDrop(e.dataTransfer));
+});
+if (isDesktop()) {
+  $('libAddFolder').hidden = false;
+  $('libAddFolder').onclick = () => $('folderIn').click();
+  $('folderIn').addEventListener('change', async e => { const fs = [...e.target.files]; e.target.value = ''; await handleFiles(fs); });
+  if (!EMBEDDED) { $('previewIpad').hidden = false; $('previewIpad').onclick = () => { try { localStorage.setItem('sv.frame', 'on'); } catch (e) {} location.href = 'preview.html'; }; }
 }
 
 /* ---------- UI wiring ---------- */
