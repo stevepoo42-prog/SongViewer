@@ -27,6 +27,7 @@
     white-space:pre; overflow-wrap:normal; }
   .line.chords { color:var(--chord); font-weight:700; }
   .row2 { margin-top:.3em; }
+  .row2.cont { margin-top:.05em; }
   .line.section + .row2, .line.blank + .row2 { margin-top:0; }
   .sec-intro { color:#b794ff; } .sec-verse { color:#6cc4ff; } .sec-chorus { color:#5ee07a; }
   .sec-bridge { color:#ff7ad9; } .sec-solo { color:#4fe3d5; } .sec-outro { color:#ff8a7a; }
@@ -153,6 +154,7 @@
   <h2>Display</h2>
   <div class="row"><label>Size</label><input id="size" type="range" min="10" max="64" value="26"></div>
   <div class="row" style="margin-top:10px"><button id="toggleJoin" class="primary">Join short lines: on</button></div>
+  <div class="row" style="margin-top:10px"><button id="toggleWrap" class="primary">Wrap long lines: on</button></div>
   <div class="row" style="margin-top:10px"><button id="toggleFit">Auto-fit to screen: off</button></div>
   <div class="row" style="margin-top:10px"><label>Spacing</label><input id="lh" type="range" min="0.85" max="1.4" step="0.05" value="1"></div>
   <div class="row" style="margin-top:10px">
@@ -318,6 +320,53 @@ function transposeChordLine(s, sh, flats) {
   return out;
 }
 
+/* ---------- Wrapping long lines onto a continuation line starting with " - " ---------- */
+const PFX = ' - ';
+function wrapUnit(u, max, showCh) {
+  const L = (u.s || '').replace(/\s+$/, ''), C = (u.c || '').replace(/\s+$/, '');
+  const plain = [{ c: u.c, s: L, cont: false }];
+  if (!wrapOn || max < 24 || Math.max(L.length, showCh ? C.length : 0) <= max) return plain;
+  const chs = []; { const re = /\S+/g; let m; while ((m = re.exec(C))) chs.push({ i: m.index, t: m[0] }); }
+  const place = (cur, col, tok) => { if (cur.length < col) cur = cur.padEnd(col); else if (cur.length && !cur.endsWith(' ')) cur += ' '; return cur + tok; };
+
+  if (!L) {                                          // a line of chords only: break between chords
+    const out = []; let segStart = 0, cur = '', n = 0;
+    chs.forEach(k => {
+      const off = out.length ? PFX.length : 0, col = k.i - segStart + off;
+      if (cur && col + k.t.length > max) { out.push({ c: cur, s: '', cont: out.length > 0 }); segStart = k.i; cur = ''; n = 0; }
+      const o2 = out.length ? PFX.length : 0;
+      cur = place(cur, k.i - segStart + o2, k.t); n++;
+    });
+    if (cur) out.push({ c: cur, s: '', cont: out.length > 0 });
+    out.forEach((o, i) => { if (i) o.c = PFX + o.c.slice(PFX.length); });        // mark continuation lines of chords too
+    return out.length ? out : plain;
+  }
+
+  const segs = []; let start = 0;                    // split the words into segments that fit
+  while (start < L.length) {
+    const lim = max - (segs.length ? PFX.length : 0);
+    let end = start + lim;
+    if (end >= L.length) end = L.length;
+    else { let sp = L.lastIndexOf(' ', end); if (sp <= start) sp = end; end = sp; }
+    segs.push({ a: start, b: end });
+    start = end; while (start < L.length && L[start] === ' ') start++;
+  }
+  const out = segs.map((g, idx) => ({ g, off: idx ? PFX.length : 0, chords: [] }));
+  chs.forEach(k => {                                 // each chord goes with the words it sat over
+    let idx = segs.length - 1;
+    for (let j = 0; j < segs.length; j++) {
+      const nx = segs[j + 1];
+      if (!nx || k.i < nx.a) { idx = (nx && k.i >= segs[j].b) ? j + 1 : j; break; }
+    }
+    out[idx].chords.push(k);
+  });
+  return out.map((o, idx) => {
+    let c = '';
+    o.chords.forEach(k => { c = place(c, Math.max(0, k.i - o.g.a) + o.off, k.t); });
+    return { c: c || null, s: (idx ? PFX : '') + L.slice(o.g.a, o.g.b), cont: idx > 0 };
+  });
+}
+
 function build() {
   const box = $('song');
   $('empty').style.display = curSong ? 'none' : 'flex';
@@ -401,8 +450,13 @@ function build() {
       }
       unit.appendChild(d);
     } else {
-      if (u.c != null && u.c.trim()) unit.appendChild(el('line chords', u.c));
-      if (u.t !== 'chordonly') unit.appendChild(el('line', u.s));
+      wrapUnit(u, maxCols, showCh).forEach((ln, i) => {
+        const r2 = i ? el('row2 cont' + (cur ? ' sec-' + cur : '')) : row, un2 = i ? el('unit') : unit;
+        if (ln.c != null && ln.c.trim()) un2.appendChild(el('line chords', ln.c));
+        if (u.t !== 'chordonly') un2.appendChild(el('line', ln.s));
+        if (i) { r2.appendChild(un2); frag.appendChild(r2); } else { row.appendChild(unit); frag.appendChild(row); }
+      });
+      return;
     }
     row.appendChild(unit); frag.appendChild(row);
   };
@@ -924,7 +978,7 @@ function cancelDrag() { if (!drag) return; const was = document.body.classList.c
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v7 · 11 Nov 13:32';   // bump on every commit
+const APP_VERSION = 'v8 · 11 Nov 13:39';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
@@ -986,7 +1040,7 @@ async function storageStatus() {
 }
 
 /* ---------- UI wiring ---------- */
-let joinMode = true;
+let joinMode = true, wrapOn = true;
 function onResize() { if (autofit) fit(); else build(); }
 let autofit = false;
 function fit() {
@@ -1004,7 +1058,7 @@ function fit() {
   window.scrollTo(0, 0);
 }
 /* ---------- Per-song display settings ---------- */
-const DEF0 = { fs: 26, lh: 1, fit: false, join: true, nochords: false, spd: 12 };
+const DEF0 = { fs: 26, lh: 1, fit: false, join: true, nochords: false, spd: 12, wrap: true };
 let defaults = { ...DEF0 };       // used by songs that have no settings of their own
 let prefs = {};                   // { songId: { fs, lh, fit, join, nochords } } - only what you changed for that song
 const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
@@ -1047,16 +1101,22 @@ function applyChords(off) {
   $('toggleChords').textContent = off ? 'Show chords' : 'Hide chords';
 }
 function applyPrefs() {            // switch the whole display to the open song's settings
-  applySize(eff('fs')); applyLH(eff('lh')); applyJoin(eff('join')); applyFit(eff('fit')); applyChords(eff('nochords')); applySpeed(eff('spd'));
+  applySize(eff('fs')); applyLH(eff('lh')); applyJoin(eff('join')); applyFit(eff('fit')); applyChords(eff('nochords')); applySpeed(eff('spd')); applyWrap(eff('wrap'));
   updatePrefNote();
 }
 function setSize(px) { applySize(px); remember('fs', px); refresh(); }
 function setLH(v) { applyLH(v); remember('lh', v); refresh(); }
+function applyWrap(on) {
+  wrapOn = on;
+  $('toggleWrap').textContent = 'Wrap long lines: ' + (on ? 'on' : 'off');
+  $('toggleWrap').classList.toggle('primary', on);
+}
+function setWrap(on) { applyWrap(on); remember('wrap', on); refresh(); }
 function setJoin(on) { applyJoin(on); remember('join', on); refresh(); }
 function setFit(on) { if (!on) applySize(eff('fs')); applyFit(on); remember('fit', on); refresh(); }
 function toggleChords() { const off = !document.body.classList.contains('nochords'); applyChords(off); remember('nochords', off); refresh(); }
 function saveDefaults() {
-  defaults = { fs: eff('fs'), lh: eff('lh'), fit: eff('fit'), join: eff('join'), nochords: eff('nochords'), spd: eff('spd') };
+  defaults = { fs: eff('fs'), lh: eff('lh'), fit: eff('fit'), join: eff('join'), nochords: eff('nochords'), spd: eff('spd'), wrap: eff('wrap') };
   lsSet('sv.def', JSON.stringify(defaults)); toast('Saved as the default for songs without their own settings');
 }
 function resetSongPrefs() {
@@ -1083,6 +1143,7 @@ document.addEventListener('pointerdown', acquireWake, { passive: true });
 $('size').addEventListener('input', e => setSize(+e.target.value));
 $('lh').addEventListener('input', e => setLH(+e.target.value));
 $('toggleChords').onclick = () => toggleChords();
+$('toggleWrap').onclick = () => setWrap(!wrapOn);
 $('saveDef').onclick = saveDefaults; $('resetSong').onclick = resetSongPrefs;
 $('toggleJoin').onclick = () => setJoin(!joinMode);
 $('toggleFit').onclick = () => setFit(!autofit);
