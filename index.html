@@ -43,7 +43,7 @@
   
 
   body.fit #song { padding-bottom:8px; }
-  #empty { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  #empty { position:fixed; inset:0; display:none; flex-direction:column; align-items:center; justify-content:center;
     gap:16px; color:var(--muted); text-align:center; padding:24px; }
   #empty button { font-size:20px; }
 
@@ -179,7 +179,7 @@
     <button id="nextSong">Next ▶</button>
   </div>
   <div class="row" style="margin-top:14px"><button id="reloadApp">Reload latest version</button></div>
-  <p class="info" id="verInfo"></p>
+  <p class="info" id="verInfo" style="white-space:pre-line"></p>
   </section>
 </div>
 <div id="sheetHandle" aria-label="Slide up to close"><span class="pill"></span></div>
@@ -881,7 +881,7 @@ function applyEdge() {
 /* ---------- Pull-down control sheet ---------- */
 const sheet = $('panel'), scrim = $('scrim');
 let drag = null;
-function openPanel() { document.body.classList.add('open'); }
+function openPanel() { document.body.classList.add('open'); if (typeof storageStatus === 'function') storageStatus(); }
 function closePanel() { document.body.classList.remove('open'); if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); }
 function beginDrag(e, opening) {
   if (e.button > 0) return;
@@ -924,7 +924,7 @@ function cancelDrag() { if (!drag) return; const was = document.body.classList.c
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v6 · 11 Nov 13:23';   // bump on every commit
+const APP_VERSION = 'v7 · 11 Nov 13:32';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
@@ -934,6 +934,56 @@ $('reloadApp').onclick = async () => {
   } catch (e) {}
   location.reload();
 };
+
+/* ---------- Durable second copy (IndexedDB) ---------- */
+// iOS can lose browser-storage writes made just before an app is closed. Everything the app saves
+// (songs, books, sets, per-song settings) is therefore also committed to IndexedDB, and restored from
+// there at start-up if localStorage turns out to be older or empty.
+const IDB = { db: null };
+const idbOpen = () => new Promise((res, rej) => {
+  try { const r = indexedDB.open('songviewer', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); r.onblocked = () => rej(new Error('blocked')); } catch (e) { rej(e); }
+});
+const idbDB = () => IDB.db || (IDB.db = idbOpen());
+async function idbGet(k) { const db = await idbDB(); return new Promise((res, rej) => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); }
+async function idbPut(k, v) { const db = await idbDB(); return new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(v, k); tx.oncomplete = () => res(); tx.onerror = tx.onabort = () => rej(tx.error); }); }
+const _lsSet = Storage.prototype.setItem, _lsRemove = Storage.prototype.removeItem;
+let mirrorTimer = 0, mirrorOk = false;
+function svKeys() { const o = {}; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('sv.') && k !== 'sv.ts') o[k] = localStorage.getItem(k); } } catch (e) {} return o; }
+async function mirrorNow() {
+  clearTimeout(mirrorTimer); mirrorTimer = 0;
+  try {
+    const data = svKeys();
+    if (!('sv.lib' in data)) return;                 // never replace the safety copy with an empty store
+    const ts = Date.now(); await idbPut('state', { ts, data }); _lsSet.call(localStorage, 'sv.ts', String(ts)); mirrorOk = true;
+  } catch (e) { mirrorOk = false; }
+}
+const scheduleMirror = () => { if (!mirrorTimer) mirrorTimer = setTimeout(mirrorNow, 400); };
+Storage.prototype.setItem = function (k, v) { _lsSet.call(this, k, v); if (this === localStorage && String(k).startsWith('sv.') && k !== 'sv.ts') scheduleMirror(); };
+Storage.prototype.removeItem = function (k) { _lsRemove.call(this, k); if (this === localStorage && String(k).startsWith('sv.') && k !== 'sv.ts') scheduleMirror(); };
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') mirrorNow(); });   // as the app goes to the background
+addEventListener('pagehide', mirrorNow);
+async function restoreFromIDB() {
+  try {
+    const snap = await Promise.race([idbGet('state'), new Promise(r => setTimeout(() => r(null), 1500))]);
+    if (!snap || !snap.data) return false;
+    mirrorOk = true;
+    const lsTs = +localStorage.getItem('sv.ts') || 0;
+    if (!localStorage.getItem('sv.lib') || snap.ts > lsTs) {
+      Object.keys(snap.data).forEach(k => _lsSet.call(localStorage, k, snap.data[k]));
+      _lsSet.call(localStorage, 'sv.ts', String(snap.ts));
+      return true;
+    }
+  } catch (e) {}
+  return false;
+}
+async function storageStatus() {
+  let persisted = 'unknown';
+  try { if (navigator.storage && navigator.storage.persisted) persisted = (await navigator.storage.persisted()) ? 'yes' : 'no'; } catch (e) {}
+  const withOwn = Object.keys(prefs).filter(id => songById(id) && Object.keys(prefs[id]).length).length;
+  $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.\n' +
+    'Saved here: ' + library.length + ' songs, ' + withOwn + ' with their own display settings.\n' +
+    'Safety copy: ' + (mirrorOk ? 'working' : 'not available') + ' · protected from clean-up: ' + persisted;
+}
 
 /* ---------- UI wiring ---------- */
 let joinMode = true;
@@ -1080,14 +1130,20 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'Enter') { e.preventDefault(); toggleScroll(); }
 });
 
-loadLib(); loadBS(); loadPrefs();
-try { const t = localStorage.getItem('sv.tab'); if (t === 'songs' || t === 'books' || t === 'sets') lib.tab = t; } catch (e) {}
-if (localStorage.getItem('sv.wake') === '1') setWake(true); else wakeLabel();
-edgeOn = localStorage.getItem('sv.edge') !== '0'; applyEdge(); scrollLabel();
-try { if (!localStorage.getItem('sv.hint1')) { localStorage.setItem('sv.hint1', '1'); setTimeout(() => toast('Pull down from the top for controls; slide it back up to return'), 600); } } catch (e) {}
-if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});   // ask iOS/Chrome not to evict saved songs & settings
-if (curId && library.some(s => s.id === curId)) selectSong(curId); else if (library[0]) selectSong(library[0].id); else { applyPrefs(); render(); }
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+async function initApp() {
+  const restored = await restoreFromIDB();
+  loadLib(); loadBS(); loadPrefs();
+  try { const t = localStorage.getItem('sv.tab'); if (t === 'songs' || t === 'books' || t === 'sets') lib.tab = t; } catch (e) {}
+  if (localStorage.getItem('sv.wake') === '1') setWake(true); else wakeLabel();
+  edgeOn = localStorage.getItem('sv.edge') !== '0'; applyEdge(); scrollLabel();
+  try { if (!localStorage.getItem('sv.hint1')) { localStorage.setItem('sv.hint1', '1'); setTimeout(() => toast('Pull down from the top for controls; slide it back up to return'), 600); } } catch (e) {}
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});   // ask iOS/Chrome not to evict saved songs & settings
+  if (curId && library.some(s => s.id === curId)) selectSong(curId); else if (library[0]) selectSong(library[0].id); else { applyPrefs(); render(); }
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (restored) setTimeout(() => toast('Restored your songs and settings from the safety copy'), 900);
+  scheduleMirror(); storageStatus();
+}
+initApp();
 </script>
 </body>
 </html>
