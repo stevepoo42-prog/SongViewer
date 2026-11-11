@@ -19,7 +19,7 @@
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
     font-family:-apple-system,system-ui,sans-serif; }
-  #song { padding:calc(env(safe-area-inset-top) + 8px) 24px 30vh 24px; margin:0;
+  #song { padding:calc(env(safe-area-inset-top) + 14px) 24px 30vh 24px; margin:0;
     -webkit-user-select:none; user-select:none; }
   #song h1 { font-size:calc(var(--fs) * 1.2); margin:0; line-height:1.1; }
   #song .meta { color:var(--muted); font-size:calc(var(--fs) * .65); margin-bottom:.3em; line-height:1.1; }
@@ -49,20 +49,23 @@
 
   /* Invisible tap zone in the top-right corner + small hint icon */
   html,body { touch-action:manipulation; }
-  .edge { position:fixed; bottom:0; width:14vw; max-width:180px; z-index:15; }
-  #edgeL { left:0; top:0; } #edgeR { right:0; top:min(18vh,160px); }
+  .edge { position:fixed; bottom:0; top:calc(env(safe-area-inset-top) + 56px); width:14vw; max-width:180px; z-index:15; }
+  #edgeL { left:0; } #edgeR { right:0; }
   .edge.flash { background:rgba(255,255,255,.10); }
-  #hot { position:fixed; top:0; right:0; width:22vw; max-width:220px; height:18vh; max-height:160px; z-index:20; }
-  #gear { position:fixed; top:calc(env(safe-area-inset-top) + 10px); right:14px; z-index:21; font-size:22px;
-    opacity:.25; pointer-events:none; }
-
-  #scrim { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:30; display:none; }
-  #panel { position:fixed; top:0; right:0; bottom:0; width:min(420px,92vw); background:var(--panel); z-index:31;
-    transform:translateX(100%); transition:transform .22s ease; overflow-y:auto;
-    padding:calc(env(safe-area-inset-top) + 16px) 18px 28px; }
-  body.open #panel { transform:none; } body.open #scrim { display:block; }
-  #panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:22px 0 8px; }
-  #panel h2:first-child { margin-top:0; }
+  #pull { position:fixed; top:0; left:0; right:0; height:calc(env(safe-area-inset-top) + 56px); z-index:22; touch-action:none;
+    display:flex; justify-content:center; align-items:flex-start; padding-top:calc(env(safe-area-inset-top) + 8px); cursor:grab; }
+  .pill { width:56px; height:6px; border-radius:3px; background:#6b6b70; }
+  #pull .pill { background:#fff; opacity:.28; }
+  #scrim { position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:30; opacity:0; pointer-events:none; transition:opacity .24s ease; touch-action:none; }
+  body.open #scrim { opacity:1; pointer-events:auto; }
+  #panel { position:fixed; top:0; left:0; right:0; max-height:88vh; display:flex; flex-direction:column; background:var(--panel); z-index:31;
+    border-radius:0 0 20px 20px; transform:translateY(-100%); visibility:hidden; transition:transform .24s ease, visibility 0s .24s; }
+  body.open #panel { transform:none; visibility:visible; transition:transform .24s ease, visibility 0s; box-shadow:0 12px 40px rgba(0,0,0,.6); }
+  #panelBody { overflow-y:auto; overscroll-behavior:contain; padding:calc(env(safe-area-inset-top) + 14px) 22px 6px;
+    display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:4px 34px; align-items:start; }
+  #panelBody section { margin-bottom:12px; }
+  #sheetHandle { flex:none; height:48px; display:flex; align-items:center; justify-content:center; touch-action:none; cursor:grab; }
+  #panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:10px 0 8px; }
   button { font:inherit; color:var(--fg); background:var(--btn); border:0; border-radius:10px; padding:12px 14px; }
   button:active { filter:brightness(1.4); }
   button.primary { background:var(--accent); }
@@ -130,11 +133,12 @@
 <div id="toast"></div>
 <div class="edge" id="edgeL" aria-label="Previous song"></div>
 <div class="edge" id="edgeR" aria-label="Next song"></div>
-<div id="hot" aria-label="Open controls"></div>
-<div id="gear">⚙︎</div>
+<div id="pull" aria-label="Pull down for controls"><span class="pill"></span></div>
 <div id="scrim"></div>
 
 <aside id="panel">
+<div id="panelBody">
+  <section>
   <h2>Key <span id="keyInfo" style="text-transform:none;letter-spacing:0"></span></h2>
   <div id="keys"></div>
   <div class="row" style="margin-top:8px">
@@ -142,7 +146,8 @@
     <button id="reset">Original key</button>
     <button id="up">+ ½ step</button>
   </div>
-
+  </section>
+  <section>
   <h2>Display</h2>
   <div class="row"><label>Size</label><input id="size" type="range" min="10" max="64" value="26"></div>
   <div class="row" style="margin-top:10px"><button id="toggleJoin" class="primary">Join short lines: on</button></div>
@@ -155,13 +160,15 @@
 
   <div class="row" style="margin-top:10px"><button id="saveDef">Use as default for all songs</button><button id="resetSong">Reset this song</button></div>
   <p class="info" id="prefNote"></p>
-
+  </section>
+  <section>
   <h2>Hands-free</h2>
   <div class="row"><button id="toggleScroll">Auto-scroll: off</button></div>
   <div class="row" style="margin-top:10px"><label id="spdLabel">Speed</label><input id="spd" type="range" min="2" max="60" value="12"></div>
   <div class="row" style="margin-top:10px"><button id="toggleEdge">Edge taps: on</button></div>
   <p class="info">Tap the left or right edge of the screen for the previous or next song. Double-tap the middle of the song to start or stop auto-scroll (turn auto-fit off first). Pedal or keyboard: Right, Down, Page Down or Space scrolls a page, then goes to the next song; Left, Up or Page Up goes back; Enter starts or stops auto-scroll.</p>
-
+  </section>
+  <section>
   <h2>Library</h2>
   <div class="row"><button class="primary" id="openLib">Library: Songs · Books · Sets</button></div>
   <div class="row" style="margin-top:8px">
@@ -169,6 +176,9 @@
     <div class="info" id="navInfo" style="text-align:center"></div>
     <button id="nextSong">Next ▶</button>
   </div>
+  </section>
+</div>
+<div id="sheetHandle" aria-label="Slide up to close"><span class="pill"></span></div>
 </aside>
 
 <input id="importFile" type="file" accept=".json,application/json" hidden>
@@ -864,9 +874,52 @@ function applyEdge() {
   $('toggleEdge').textContent = 'Edge taps: ' + (edgeOn ? 'on' : 'off'); $('toggleEdge').classList.toggle('primary', edgeOn);
 }
 
-/* ---------- UI wiring ---------- */
+/* ---------- Pull-down control sheet ---------- */
+const sheet = $('panel'), scrim = $('scrim');
+let drag = null;
 function openPanel() { document.body.classList.add('open'); }
 function closePanel() { document.body.classList.remove('open'); if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); }
+function beginDrag(e, opening) {
+  if (e.button > 0) return;
+  drag = { y0: e.clientY, t0: performance.now(), opening, y: opening ? 0 : sheet.offsetHeight, moved: false };
+  try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+  sheet.style.transition = 'none'; scrim.style.transition = 'none';
+  if (opening) sheet.style.visibility = 'visible';
+}
+function moveDrag(e) {
+  if (!drag) return;
+  const h = sheet.offsetHeight, dy = e.clientY - drag.y0;
+  if (Math.abs(dy) > 6) drag.moved = true;
+  if (!drag.moved) return;
+  const y = Math.min(h, Math.max(0, drag.opening ? dy : h + dy));
+  drag.y = y; sheet.style.transform = 'translateY(' + (y - h) + 'px)';
+  scrim.style.opacity = h ? y / h : 0; scrim.style.pointerEvents = 'none';
+}
+function settle(open) {                      // let the CSS animation take over from wherever the finger left the sheet
+  sheet.style.transition = ''; scrim.style.transition = ''; void sheet.offsetHeight;
+  sheet.style.transform = ''; sheet.style.visibility = ''; scrim.style.opacity = ''; scrim.style.pointerEvents = '';
+  if (open) openPanel(); else closePanel();
+}
+function endDrag(e) {
+  if (!drag) return;
+  const d = drag; drag = null;
+  const h = sheet.offsetHeight, v = (e.clientY - d.y0) / Math.max(1, performance.now() - d.t0);   // px per ms
+  let open;
+  if (!d.moved) open = d.opening;                                    // a tap: the top handle opens, the dimmed area/handle closes
+  else if (d.opening) open = d.y > h * 0.3 || v > 0.5;
+  else open = !(d.y < h * 0.7 || v < -0.5);
+  settle(open);
+}
+function cancelDrag() { if (!drag) return; const was = document.body.classList.contains('open'); drag = null; settle(was); }
+[['pull', true], ['scrim', false], ['sheetHandle', false]].forEach(([id, opening]) => {
+  const el = $(id);
+  el.addEventListener('pointerdown', e => beginDrag(e, opening));
+  el.addEventListener('pointermove', moveDrag);
+  el.addEventListener('pointerup', endDrag);
+  el.addEventListener('pointercancel', cancelDrag);
+});
+
+/* ---------- UI wiring ---------- */
 let joinMode = true;
 function onResize() { if (autofit) fit(); else build(); }
 let autofit = false;
@@ -961,8 +1014,6 @@ async function setWake(on) {
 document.addEventListener('visibilitychange', acquireWake);        // re-acquire after returning to the app
 document.addEventListener('pointerdown', acquireWake, { passive: true });
 
-$('hot').addEventListener('click', () => document.body.classList.contains('open') ? closePanel() : openPanel());
-$('scrim').addEventListener('click', closePanel);
 $('size').addEventListener('input', e => setSize(+e.target.value));
 $('lh').addEventListener('input', e => setLH(+e.target.value));
 $('toggleChords').onclick = () => toggleChords();
@@ -1017,6 +1068,7 @@ loadLib(); loadBS(); loadPrefs();
 try { const t = localStorage.getItem('sv.tab'); if (t === 'songs' || t === 'books' || t === 'sets') lib.tab = t; } catch (e) {}
 if (localStorage.getItem('sv.wake') === '1') setWake(true); else wakeLabel();
 edgeOn = localStorage.getItem('sv.edge') !== '0'; applyEdge(); scrollLabel();
+try { if (!localStorage.getItem('sv.hint1')) { localStorage.setItem('sv.hint1', '1'); setTimeout(() => toast('Pull down from the top for controls; slide it back up to return'), 600); } } catch (e) {}
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});   // ask iOS/Chrome not to evict saved songs & settings
 if (curId && library.some(s => s.id === curId)) selectSong(curId); else if (library[0]) selectSong(library[0].id); else { applyPrefs(); render(); }
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
