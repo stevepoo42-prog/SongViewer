@@ -41,9 +41,9 @@
   .line .tc { color:var(--chord); font-weight:700; }
   .line.section + .row2, .line.blank + .row2 { margin-top:0; }
   .sec-intro { color:#b794ff; } .sec-verse { color:#6cc4ff; } .sec-chorus { color:#5ee07a; }
-  .sec-bridge { color:#ff7ad9; } .sec-solo { color:#4fe3d5; } .sec-outro { color:#ff8a7a; }
+  .sec-bridge { color:#ff7ad9; } .sec-solo { color:#4fe3d5; } .sec-outro { color:#ff8a7a; } .sec-instrumental { color:#ffb347; } .sec-link { color:#c8d65a; }
   .line.section.sec-intro { color:#b794ff; } .line.section.sec-verse { color:#6cc4ff; } .line.section.sec-chorus { color:#5ee07a; }
-  .line.section.sec-bridge { color:#ff7ad9; } .line.section.sec-solo { color:#4fe3d5; } .line.section.sec-outro { color:#ff8a7a; }
+  .line.section.sec-bridge { color:#ff7ad9; } .line.section.sec-solo { color:#4fe3d5; } .line.section.sec-outro { color:#ff8a7a; } .line.section.sec-instrumental { color:#ffb347; } .line.section.sec-link { color:#c8d65a; }
   .line.blank { height:calc(var(--lh) * .35em); }
   .line.section { color:var(--section); font-weight:700; margin-top:.25em; line-height:var(--lh); text-transform:uppercase;
     font-size:calc(var(--fs) * .8); letter-spacing:.05em; }
@@ -256,7 +256,7 @@ function transposeChord(tok, shift, flats) {
 }
 
 /* ---------- Parsing ---------- */
-const SECTION_RE = /^\s*[\[(]?\s*(intro|verse|chorus|pre[- ]?chorus|bridge|outro|tag|instrumental|solo|interlude|refrain|ending|turnaround|coda|vamp|break)(?![a-z])[^\]\)]*[\])]?\s*:?\s*$/i;
+const SECTION_RE = /^\s*[\[(]?\s*(intro|verse|chorus|pre[- ]?chorus|bridge|outro|tag|instrumental|solo|interlude|refrain|ending|turnaround|coda|vamp|break|link)(?![a-z])[^\]\)]*[\])]?\s*:?\s*$/i;
 const KEYLINE_RE = /^\s*(?:key\s*(?:of)?\s*[:\-]?\s*)([A-G][#b]?)(m(?!aj)(?:in)?)?\s*$/i;
 
 // "Word-document" style: the lyric comes first and its chords follow at the end of the same line, in brackets,
@@ -497,7 +497,9 @@ const secKey = n => {
   if (/^verse/.test(n)) return 'verse';
   if (/^(pre[- ]?chorus|chorus|refrain)/.test(n)) return 'chorus';
   if (/^bridge/.test(n)) return 'bridge';
-  if (/^(solo|instrumental|interlude|break)/.test(n)) return 'solo';
+  if (/^(solo|interlude|break)/.test(n)) return 'solo';
+  if (/^instrumental/.test(n)) return 'instrumental';
+  if (/^link/.test(n)) return 'link';
   if (/^(outro|ending|coda|tag)/.test(n)) return 'outro';
   return '';
 };
@@ -1260,7 +1262,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v18 · 11 Nov 16:13';   // bump on every commit
+const APP_VERSION = 'v19 · 11 Nov 20:20';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
