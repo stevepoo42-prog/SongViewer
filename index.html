@@ -49,6 +49,7 @@
 
   /* Invisible tap zone in the top-right corner + small hint icon */
   html,body { touch-action:manipulation; }
+  #ver { position:fixed; top:calc(env(safe-area-inset-top) + 3px); right:10px; z-index:21; font-size:11px; color:rgba(255,255,255,.3); pointer-events:none; letter-spacing:.02em; }
   .edge { position:fixed; bottom:0; top:calc(env(safe-area-inset-top) + 56px); width:14vw; max-width:180px; z-index:15; }
   #edgeL { left:0; } #edgeR { right:0; }
   .edge.flash { background:rgba(255,255,255,.10); }
@@ -133,6 +134,7 @@
 <div id="toast"></div>
 <div class="edge" id="edgeL" aria-label="Previous song"></div>
 <div class="edge" id="edgeR" aria-label="Next song"></div>
+<div id="ver"></div>
 <div id="pull" aria-label="Pull down for controls"><span class="pill"></span></div>
 <div id="scrim"></div>
 
@@ -176,6 +178,8 @@
     <div class="info" id="navInfo" style="text-align:center"></div>
     <button id="nextSong">Next ▶</button>
   </div>
+  <div class="row" style="margin-top:14px"><button id="reloadApp">Reload latest version</button></div>
+  <p class="info" id="verInfo"></p>
   </section>
 </div>
 <div id="sheetHandle" aria-label="Slide up to close"><span class="pill"></span></div>
@@ -918,6 +922,18 @@ function cancelDrag() { if (!drag) return; const was = document.body.classList.c
   el.addEventListener('pointerup', endDrag);
   el.addEventListener('pointercancel', cancelDrag);
 });
+
+/* ---------- Version ---------- */
+const APP_VERSION = 'v6 · 11 Nov 13:23';   // bump on every commit
+$('ver').textContent = APP_VERSION;
+$('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
+$('reloadApp').onclick = async () => {
+  try {
+    const regs = await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r => r.unregister()));
+    const ks = await caches.keys(); await Promise.all(ks.map(k => caches.delete(k)));
+  } catch (e) {}
+  location.reload();
+};
 
 /* ---------- UI wiring ---------- */
 let joinMode = true;
