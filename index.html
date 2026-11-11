@@ -598,7 +598,7 @@ async function addFiles(files) {
 /* ---------- Books, Sets and the library screen ---------- */
 let books = [], sets = [];            // [{id, name, ids:[songId,...]}]  (ids point into the Songs library)
 let ctx = null;                       // where the open song came from: {type:'songs'|'book'|'set', id}
-const lib = { open: false, tab: 'songs', view: null, sel: new Set(), q: '' };
+const lib = { open: false, tab: 'songs', view: null, sel: new Set(), selSets: new Set(), q: '' };
 
 const uid = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 const songById = id => library.find(s => s.id === id);
@@ -741,6 +741,7 @@ async function deleteList(type, id) {
   if (type === 'book') books = books.filter(b => b.id !== id); else sets = sets.filter(b => b.id !== id);
   if (ctx && ctx.type === type && ctx.id === id) ctx = null;
   if (lib.view && lib.view.id === id) lib.view = null;
+  lib.selSets.delete(id);
   saveBS(); renderLibrary(); updateNav();
 }
 async function renameList() {
@@ -781,7 +782,7 @@ async function addSongsToView() {
 /* --- the library screen --- */
 function openLib() { lib.open = true; $('libScreen').style.display = 'flex'; closePanel(); renderLibrary(); }
 function closeLib() { lib.open = false; $('libScreen').style.display = 'none'; if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); }
-function setTab(t) { try { localStorage.setItem('sv.tab', t); } catch (e) {} lib.tab = t; lib.view = null; lib.sel.clear(); lib.q = ''; renderLibrary(); }
+function setTab(t) { try { localStorage.setItem('sv.tab', t); } catch (e) {} lib.tab = t; lib.view = null; lib.sel.clear(); lib.selSets.clear(); lib.q = ''; renderLibrary(); }
 
 function songRows(ids, context, reorder) {
   const q = lib.q.trim().toLowerCase(), frag = document.createDocumentFragment();
@@ -804,6 +805,11 @@ function collectionRows(type) {
   const coll = type === 'book' ? books : sets, frag = document.createDocumentFragment();
   coll.forEach(l => {
     const r = mk('div', 'lrow');
+    if (type === 'set') {                                  // tick sets to share them
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = lib.selSets.has(l.id);
+      cb.onchange = () => { cb.checked ? lib.selSets.add(l.id) : lib.selSets.delete(l.id); renderActions(); };
+      r.append(cb);
+    }
     r.append(btn(l.name + '   ·   ' + l.ids.filter(songById).length + ' songs', () => { lib.view = { type, id: l.id }; lib.sel.clear(); lib.q = ''; renderLibrary(); }, 'lname'),
       btn('✕', () => deleteList(type, l.id), 'mv del'));
     frag.appendChild(r);
@@ -841,6 +847,7 @@ function renderLibrary() {
       btn('None', () => { lib.sel.clear(); renderLibrary(); }));
   } else if (!lib.view) {
     sub.append(mk('div', 'ltitle', lib.tab === 'books' ? 'Books' : 'Sets'));
+    if (lib.tab === 'sets') sub.append(btn('Select all', () => { sets.forEach(x => lib.selSets.add(x.id)); renderLibrary(); }), btn('None', () => { lib.selSets.clear(); renderLibrary(); }));
   } else {
     const l = listOf(lib.view.type, lib.view.id);
     sub.append(btn('‹ Back', () => { lib.view = null; lib.sel.clear(); lib.q = ''; renderLibrary(); }),
@@ -860,9 +867,16 @@ function renderActions() {
     bar.append(btn('Add to Book…', () => addToList('book', ids)), btn('Add to Set…', () => addToList('set', ids)), btn('Delete', () => deleteSongs(ids), 'danger'));
     [...bar.children].forEach(dis);
   } else if (!lib.view) {
-    bar.appendChild(btn('＋ New ' + (lib.tab === 'books' ? 'book' : 'set'), () => newList(lib.tab === 'books' ? 'book' : 'set'), 'primary'));
+    const t = lib.tab === 'books' ? 'book' : 'set';
+    bar.appendChild(btn('＋ New ' + t, () => newList(t), 'primary'));
+    if (t === 'set') {
+      const sh = btn('Share via AirDrop…', () => shareSets([...lib.selSets])); sh.disabled = lib.selSets.size === 0; bar.appendChild(sh);
+      if (lib.selSets.size) bar.appendChild(mk('span', 'info', lib.selSets.size + ' selected'));
+    }
+    return;
   } else {
     bar.appendChild(btn('＋ Add songs…', addSongsToView, 'primary'));
+    if (lib.view.type === 'set') bar.appendChild(btn('Share via AirDrop…', () => shareSets([lib.view.id])));
     if (lib.view.type === 'book') bar.appendChild(dis(btn('Add to Set…', () => addToList('set', ids))));
     bar.appendChild(dis(btn('Remove from ' + lib.view.type, () => removeFromList(ids), 'danger')));
   }
@@ -886,22 +900,43 @@ function backupDialog() {
       '\nIn the app now: ' + library.length + ' songs, ' + books.length + ' books, ' + sets.length + ' sets'));
     box.appendChild(btn('Export backup…', () => { close(); exportBackup(); }, 'primary'));
     box.appendChild(btn('Import backup…', () => { close(); $('importFile').click(); }));
-    box.appendChild(mk('p', 'info', 'Save the exported file to iCloud Drive (or AirDrop it). Import can merge it into another iPad’s library, which is also how to copy a set to a bandmate.'));
+    box.appendChild(mk('p', 'info', 'Backups: save the file to iCloud Drive. To send sets to another iPad, use Library ▸ Sets, tick the sets and choose Share via AirDrop; on the other iPad save the file, then Import it here.'));
     box.appendChild(btn('Close', () => close()));
   });
 }
-async function exportBackup() {
-  const name = 'SongViewer-backup-' + new Date().toISOString().slice(0, 10) + '.json';
-  const file = new File([JSON.stringify(makeBackup())], name, { type: 'application/json' });
+async function shareFile(name, json) {         // the share sheet (AirDrop, Messages, Files...) or, elsewhere, a plain download
+  const file = new File([json], name, { type: 'application/json' });
   try {
     if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: name });
-    else {                                           // browsers without file sharing: plain download
+    else {
       const url = URL.createObjectURL(file), a = document.createElement('a');
       a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 4000);
     }
+    return true;
+  } catch (e) { if (e.name !== 'AbortError') toast('Could not share: ' + e.message); return false; }
+}
+async function exportBackup() {
+  if (await shareFile('SongViewer-backup-' + new Date().toISOString().slice(0, 10) + '.json', JSON.stringify(makeBackup()))) {
     lsSet('sv.lastBackup', String(Date.now())); updateBackupBtn(); toast('Backup exported');
-  } catch (e) { if (e.name !== 'AbortError') toast('Could not export: ' + e.message); }
+  }
+}
+function makeSetsShare(setIds) {                 // just the chosen sets, the songs in them, each song's key and display settings
+  const chosen = setIds.map(id => sets.find(x => x.id === id)).filter(Boolean);
+  const want = new Set(); chosen.forEach(c => c.ids.forEach(i => { if (songById(i)) want.add(i); }));
+  const songs = library.filter(x => want.has(x.id)).map(x => ({ id: x.id, name: x.name, text: x.text, shift: x.shift || 0 }));
+  const pf = {}; songs.forEach(x => { if (prefs[x.id]) pf[x.id] = prefs[x.id]; });
+  return { app: 'SongViewer', version: 1, kind: 'sets', exported: new Date().toISOString(), library: songs, books: [], prefs: pf,
+    sets: chosen.map(c => ({ id: c.id, name: c.name, ids: c.ids.filter(i => want.has(i)) })) };
+}
+async function shareSets(setIds) {
+  const payload = makeSetsShare(setIds);
+  if (!payload.sets.length) { toast('Tick a set to share'); return; }
+  const base = (payload.sets.length === 1 ? payload.sets[0].name : payload.sets.length + ' sets').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 60) || 'sets';
+  if (await shareFile('SongViewer set - ' + base + '.json', JSON.stringify(payload))) {
+    toast('Shared. On the other iPad: Library ▸ Backup ▸ Import');
+    lib.selSets.clear(); renderActions(); if (lib.open) renderLibrary();
+  }
 }
 const validSong = s => s && typeof s.id === 'string' && typeof s.name === 'string' && typeof s.text === 'string';
 function saveAll() { saveLib(); saveBS(); savePrefs(); lsSet('sv.def', JSON.stringify(defaults)); }
@@ -943,11 +978,48 @@ function applyMerge(b) {
   mergeColl(books, b.books, 'b'); mergeColl(sets, b.sets, 's');
   afterImport('Merged: ' + newSongs + ' new songs, ' + newLists + ' new books/sets');
 }
+function applySharedSets(b, useKeys) {          // add the sets; songs you already have are kept (optionally switched to the sender's keys)
+  const map = {}; let added = 0, differs = 0, rekeyed = false;
+  b.library.filter(validSong).forEach(sg => {
+    let ex = library.find(x => x.name === sg.name);
+    if (!ex) {
+      ex = { id: songById(sg.id) ? uid('s') : sg.id, name: sg.name, text: sg.text, shift: sg.shift || 0 };
+      library.push(ex); added++;
+      if (b.prefs && b.prefs[sg.id]) prefs[ex.id] = { ...b.prefs[sg.id] };
+    } else {
+      if (ex.text !== sg.text) differs++;
+      if (useKeys && (ex.shift || 0) !== (sg.shift || 0)) { ex.shift = sg.shift || 0; if (ex.id === curId) rekeyed = true; }
+    }
+    map[sg.id] = ex.id;
+  });
+  library.sort((x, y) => x.name.localeCompare(y.name));
+  const names = [];
+  (b.sets || []).forEach(c => {
+    if (!c || !c.name) return;
+    let name = c.name;                                     // never overwrite a set of yours: a clash gets the date added
+    if (sets.some(x => x.name === name)) {
+      const d = new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'short' }); let n = 2;
+      name = c.name + ' (' + d + ')';
+      while (sets.some(x => x.name === name)) name = c.name + ' (' + d + ') ' + n++;
+    }
+    sets.push({ id: uid('s'), name, ids: (c.ids || []).map(i => map[i]).filter(Boolean) }); names.push(name);
+  });
+  afterImport('Added ' + (names.length === 1 ? '“' + names[0] + '”' : names.length + ' sets') + ' · ' + added + ' new song' + (added === 1 ? '' : 's') +
+    (differs ? ' · ' + differs + ' of yours ' + (differs === 1 ? 'differs' : 'differ') + ' from the sender’s (yours kept)' : ''));
+  if (rekeyed && curId) selectSong(curId);
+}
 async function importBackupFile(f) {
   let b;
   try { b = JSON.parse(await f.text()); } catch (e) { toast('That file isn’t a SongViewer backup'); return; }
   if (!b || b.app !== 'SongViewer' || !Array.isArray(b.library)) { toast('That file isn’t a SongViewer backup'); return; }
   const n = b.library.filter(validSong).length;
+  if (b.kind === 'sets') {                                  // sets shared from another iPad
+    const nm = (b.sets || []).map(x => x.name).join(', ');
+    const pick = await choose('Shared ' + ((b.sets || []).length === 1 ? 'set' : 'sets') + ': ' + nm + ' (' + n + ' songs)',
+      [{ id: 'keep', label: 'Add it. Keep my songs and my keys' }, { id: 'keys', label: 'Add it. Use the sender’s keys for these songs' }]);
+    if (pick) applySharedSets(b, pick === 'keys');
+    return;
+  }
   const choice = await choose('Backup from ' + (b.exported ? new Date(b.exported).toLocaleDateString() : 'unknown date') +
     ': ' + n + ' songs, ' + (b.books || []).length + ' books, ' + (b.sets || []).length + ' sets',
     [{ id: 'merge', label: 'Merge into what’s here (keeps your current songs)' }, { id: 'replace', label: 'Replace everything in this library' }]);
@@ -1060,7 +1132,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v13 · 11 Nov 14:14';   // bump on every commit
+const APP_VERSION = 'v14 · 11 Nov 14:46';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
