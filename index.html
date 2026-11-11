@@ -37,6 +37,7 @@
   .line.chords { color:var(--chord); font-weight:700; }
   .row2 { margin-top:.3em; }
   .row2.cont { margin-top:.05em; }
+  .line.note { font-family:-apple-system,system-ui,sans-serif; font-style:italic; color:var(--muted); white-space:normal; font-size:.85em; margin:.2em 0; }
   .line .tc { color:var(--chord); font-weight:700; }
   .line.section + .row2, .line.blank + .row2 { margin-top:0; }
   .sec-intro { color:#b794ff; } .sec-verse { color:#6cc4ff; } .sec-chorus { color:#5ee07a; }
@@ -230,7 +231,7 @@
 
 <input id="folderIn" type="file" webkitdirectory multiple hidden>
 <input id="importFile" type="file" accept=".json,application/json" hidden>
-<input id="file" type="file" accept=".txt,.text,.cho,.crd,.chopro,.pro,.onsong,text/plain" multiple hidden>
+<input id="file" type="file" accept=".txt,.text,.cho,.crd,.chopro,.chordpro,.pro,.onsong,text/plain" multiple hidden>
 
 <script>
 'use strict';
@@ -285,25 +286,65 @@ function isChordLine(line) {
   return chords > 0;
 }
 
+const isChordTok = t => CHORD_RE.test(t) || /^N\.?C\.?$/i.test(t) || /^\*./.test(t);       // a chord, "N.C." or a [*annotation]
 function parseSong(name, text) {
   const raw = text.replace(/\r\n?/g, '\n').replace(/\t/g, '    ').split('\n');
   const song = { name, title: name.replace(/\.[^.]+$/, ''), artist: '', key: null, minor: false, lines: [] };
-  let sawTitle = false, titleIdx = -1;
+  let sawTitle = false, titleIdx = -1, env = null, lastChorus = null, hasDirectives = false;
+
+  // ---- ChordPro: {directive: value}
+  const clone = o => JSON.parse(JSON.stringify(o));
+  const labelOf = v => {                                    // "Verse 1"  or  label="Verse 1"
+    const m = /label\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))/i.exec(v);
+    if (m) return (m[1] != null ? m[1] : m[2] != null ? m[2] : m[3]).trim();
+    return v.replace(/\b\w+\s*=\s*(?:"[^"]*"|\S+)/g, '').trim();
+  };
+  const ENV_BASE = { verse: 'Verse', chorus: 'Chorus', bridge: 'Bridge', tab: 'Tab', grid: 'Grid' };
+  const SHORT = { sov: 'verse', soc: 'chorus', sob: 'bridge', sot: 'tab', sog: 'grid' }, SHORT_END = { eov: 'verse', eoc: 'chorus', eob: 'bridge', eot: 'tab', eog: 'grid' };
+  const startEnv = (kind, v) => {
+    const lab = labelOf(v) || ENV_BASE[kind] || (kind.charAt(0).toUpperCase() + kind.slice(1).replace(/_/g, ' '));
+    song.lines.push({ t: 'section', s: lab });
+    env = { kind, label: lab, start: song.lines.length, verbatim: kind === 'tab' || kind === 'grid' };
+  };
+  const endEnv = () => {
+    if (env && env.kind === 'chorus') lastChorus = { label: env.label, lines: clone(song.lines.slice(env.start)) };
+    if (env) song.lines.push({ t: 'endsec' });
+    env = null;
+  };
+  const setMeta = (k, v) => {
+    if (k === 'title' || k === 't') { song.title = v; sawTitle = true; }
+    else if (k === 'subtitle' || k === 'st') song._subtitle = v;
+    else if (k === 'artist') song._artist = v;
+    else if (k === 'composer' || k === 'lyricist' || k === 'arranger') song._composer = song._composer || v;
+    else if (k === 'key') setKey(song, v);
+    else if (k === 'capo') { if (v) song.capo = /^\d+$/.test(v) ? 'Capo ' + v : /^capo/i.test(v) ? v : 'Capo ' + v; }
+    else if (k === 'tempo') song.tempo = v;
+    else return false;
+    return true;
+  };
+  const directive = (k, v) => {
+    hasDirectives = true;
+    if (k === 'meta') { const m = /^(\w+)\s+(.*)$/.exec(v); if (m) setMeta(m[1].toLowerCase(), m[2].trim()); return; }
+    if (setMeta(k, v)) return;
+    if (/^(comment|c|comment_italic|ci|comment_box|cb|highlight|hl)$/.test(k)) { if (v) song.lines.push({ t: 'note', s: v }); return; }
+    let m;
+    if ((m = /^start_of_(\w+)$/.exec(k))) { endEnv(); startEnv(m[1], v); return; }
+    if (SHORT[k]) { endEnv(); startEnv(SHORT[k], v); return; }
+    if (/^end_of_\w+$/.test(k) || SHORT_END[k]) { endEnv(); return; }
+    if (k === 'chorus') {                                   // {chorus}: play the last chorus again
+      song.lines.push({ t: 'section', s: labelOf(v) || (lastChorus && lastChorus.label) || 'Chorus' });
+      if (lastChorus) lastChorus.lines.forEach(l => song.lines.push(clone(l)));
+      song.lines.push({ t: 'endsec' }); return;
+    }
+    // everything else ({define}, {new_page}, {columns}, {textsize}...) has no meaning here
+  };
 
   for (let i = 0; i < raw.length; i++) {
     const line = raw[i];
-    // ChordPro directives
-    let d = /^\s*\{\s*(\w+)\s*:?\s*(.*?)\s*\}\s*$/.exec(line);
-    if (d) {
-      const k = d[1].toLowerCase(), v = d[2];
-      if (k === 'title' || k === 't') { song.title = v; sawTitle = true; }
-      else if (k === 'artist' || k === 'subtitle' || k === 'st') song.artist = v;
-      else if (k === 'key') setKey(song, v);
-      else if (/^(soc|start_of_chorus)$/.test(k)) song.lines.push({ t: 'section', s: 'Chorus' });
-      else if (/^(sov|start_of_verse)$/.test(k)) song.lines.push({ t: 'section', s: 'Verse' });
-      else if (/^(sob|start_of_bridge)$/.test(k)) song.lines.push({ t: 'section', s: 'Bridge' });
-      continue;
-    }
+    const d = /^\s*\{\s*(\w+)\s*:?\s*(.*?)\s*\}\s*$/.exec(line);
+    if (d) { directive(d[1].toLowerCase(), d[2]); continue; }
+    if (env && env.verbatim) { song.lines.push(line.trim() ? { t: 'verb', s: line.replace(/\s+$/, '') } : { t: 'blank' }); continue; }   // tab / grid blocks are shown as written
+    if (/^\s*#/.test(line)) continue;                       // ChordPro comment line
     const kl = KEYLINE_RE.exec(line);
     if (kl && !song.key) { setKey(song, kl[1] + (kl[2] ? 'm' : '')); continue; }
     if (kl) continue;
@@ -318,10 +359,10 @@ function parseSong(name, text) {
 
     if (isChordLine(line)) { song.lines.push({ t: 'chords', s: line.replace(/\[([^\]]*)\]/g, (m, c) => c + '  ').replace(/\s+$/, '') }); continue; }
 
-    if (/\[[^\]]+\]/.test(line) && /\[[A-G][^\]]*\]/.test(line)) {
+    if (/\[[^\]]+\]/.test(line) && /\[(?:[A-G][^\]]*|N\.?C\.?|\*[^\]]*)\]/.test(line)) {
       const segs = [];
       line.split(/(\[[^\]]+\])/).forEach(p => {
-        if (/^\[[^\]]+\]$/.test(p) && CHORD_RE.test(p.slice(1, -1))) segs.push({ c: p.slice(1, -1), l: '' });
+        if (/^\[[^\]]+\]$/.test(p) && isChordTok(p.slice(1, -1))) segs.push({ c: p.slice(1, -1), l: '' });
         else if (p) { if (!segs.length || segs[segs.length - 1].l) segs.push({ c: '', l: p }); else segs[segs.length - 1].l = p; }
       });
       song.lines.push({ t: 'inline', segs });
@@ -334,6 +375,7 @@ function parseSong(name, text) {
     song.lines.push({ t: 'lyric', s: line.replace(/\s+$/, '') });
   }
 
+  if (song._artist || song._composer || song._subtitle) song.artist = [song._artist || song._composer || '', song._subtitle || ''].filter(Boolean).join(' · ');
   // strip leading blanks
   while (song.lines.length && song.lines[0].t === 'blank') song.lines.shift();
 
@@ -467,8 +509,8 @@ function layoutSong(song, shiftN, o) {
   const flats = flatsFor(song, shiftN);
   const nowKey = keyLabel((noteIndex(song.key[0], song.key[1] || '') + shiftN) % 12, song.minor, flats);
   const origKey = keyLabel(noteIndex(song.key[0], song.key[1] || ''), song.minor, flatsFor(song, 0));
-  const head = { title: song.title, artist: song.artist || '', capo: song.capo || '', key: nowKey, origKey,
-    meta: [song.artist, song.capo, 'Key: ' + nowKey + (shiftN ? '  (original ' + origKey + ')' : '')].filter(Boolean).join('  ·  ') };
+  const head = { title: song.title, artist: song.artist || '', capo: song.capo || '', tempo: song.tempo || '', key: nowKey, origKey,
+    meta: [song.artist, song.capo, song.tempo ? 'Tempo ' + song.tempo : '', 'Key: ' + nowKey + (shiftN ? '  (original ' + origKey + ')' : '')].filter(Boolean).join('  ·  ') };
 
   // pass 1: turn parsed lines into items
   const items = []; let pend = null;
@@ -477,6 +519,9 @@ function layoutSong(song, shiftN, o) {
     if (l.t === 'blank' || l.t === 'section') { flushPend(); items.push({ k: l.t, s: l.s }); }
     else if (l.t === 'chords') { flushPend(); pend = transposeChordLine(l.s, shiftN, flats); }
     else if (l.t === 'lyric') { items.push({ k: 'unit', t: 'lyric', c: pend, s: l.s }); pend = null; }
+    else if (l.t === 'note') { flushPend(); items.push({ k: 'note', s: l.s }); }
+    else if (l.t === 'endsec') { flushPend(); items.push({ k: 'endsec' }); }
+    else if (l.t === 'verb') { flushPend(); items.push({ k: 'unit', t: 'verb', s: l.s }); }
     else if (l.t === 'trail') { flushPend(); items.push({ k: 'unit', t: 'trail', lead: l.lead, cl: l.cl.replace(/\[([^\]]*)\]/g, (m, c) => CHORD_RE.test(c) ? '[' + transposeChord(c, shiftN, flats) + ']' : m) }); }
     else { items.push({ k: 'unit', t: 'inline', segs: l.segs.map(g => ({ c: g.c ? transposeChord(g.c, shiftN, flats) : '', l: g.l })) }); pend = null; }
   }
@@ -519,6 +564,8 @@ function layoutSong(song, shiftN, o) {
         if (!ln.s.trim() && !ln.cl) return;
         rows.push({ k: 'group', sec: cur, cont: i > 0, lines: [{ t: 'trail', s: ln.s, cl: ln.cl }] });
       });
+    } else if (u.t === 'verb') {                           // tab / grid line: shown exactly as written
+      rows.push({ k: 'group', sec: cur, cont: true, lines: [{ t: 'lyric', s: u.s }] });
     } else if (u.t === 'inline') {
       rows.push({ k: 'group', sec: cur, cont: false, lines: [{ t: 'inline', segs: u.segs }] });
     } else {
@@ -533,6 +580,8 @@ function layoutSong(song, shiftN, o) {
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     if (it.k === 'blank') rows.push({ k: 'blank' });
+    else if (it.k === 'note') rows.push({ k: 'note', s: it.s });
+    else if (it.k === 'endsec') cur = '';
     else if (it.k === 'section') { cur = secKey(it.s); rows.push({ k: 'section', s: it.s, sec: cur }); }
     else {
       const nx = items[i + 1];
@@ -548,6 +597,7 @@ function renderRows(rows, frag) {                      // the on-screen look of 
   for (const r of rows) {
     if (r.k === 'blank') { frag.appendChild(el('line blank')); continue; }
     if (r.k === 'section') { frag.appendChild(el('line section' + (r.sec ? ' sec-' + r.sec : ''), r.s)); continue; }
+    if (r.k === 'note') { frag.appendChild(el('line note', r.s)); continue; }
     const row = el('row2' + (r.cont ? ' cont' : '') + (r.sec ? ' sec-' + r.sec : '')), unit = el('unit');
     for (const ln of r.lines) {
       if (ln.t === 'chords') unit.appendChild(el('line chords', ln.s));
@@ -630,14 +680,28 @@ function selectSong(id) {
   curId = id; curSong = parseSong(e.name, e.text); shift = e.shift || 0; saveLib(); saveBS(); applyPrefs(); holdUntil = performance.now() + 2500;
   window.scrollTo(0, 0); render(); updateNav();
 }
+/* ChordPro files are named after the song ("Artist - Title.cho") and a file holding several songs ({new_song}) is split up. */
+function expandSongFile(name, text) {
+  if (!/^\s*\{\s*(?:title|t|subtitle|st|artist|key|capo|comment|c|new_song|ns|start_of_\w+|so[vcbtg])\b/im.test(text)) return [{ name, text }];
+  const parts = text.split(/^\s*\{\s*(?:new_song|ns)\b[^}]*\}[ \t]*$/im).map(x => x.trim()).filter(Boolean);
+  const nameOf = (part, i) => {
+    const g = k => { const m = new RegExp('^\\s*\\{\\s*(?:' + k + ')\\b\\s*:?\\s*([^}]*)\\}', 'im').exec(part); return m ? m[1].trim() : ''; };
+    const title = g('title|t'), artist = g('artist') || g('composer') || g('subtitle|st');
+    if (!title) return parts.length > 1 ? name.replace(/\.[^.]+$/, '') + ' ' + (i + 1) + '.cho' : name;
+    return ((artist ? artist + ' - ' : '') + title).replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100) + '.cho';   // one extension, so the same song is always the same entry
+  };
+  return parts.map((p, i) => ({ name: nameOf(p, i), text: p + '\n' }));
+}
 async function addFiles(files) {
   let n = 0;
   for (const f of files) {
     const text = await f.text();
-    const ex = library.find(s => s.name === f.name);
-    if (ex) ex.text = text;
-    else library.push({ id: 's' + Date.now() + Math.random().toString(36).slice(2, 6), name: f.name, text, shift: 0 });
-    n++;
+    for (const part of expandSongFile(f.name, text)) {
+      const ex = library.find(s => s.name === part.name);
+      if (ex) ex.text = part.text;
+      else library.push({ id: 's' + Date.now() + Math.random().toString(36).slice(2, 6), name: part.name, text: part.text, shift: 0 });
+      n++;
+    }
   }
   library.sort((a, b) => a.name.localeCompare(b.name));
   saveLib(); toast('Added ' + n + ' song' + (n === 1 ? '' : 's'));
@@ -1196,7 +1260,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v17 · 11 Nov 15:27';   // bump on every commit
+const APP_VERSION = 'v18 · 11 Nov 16:13';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
@@ -1262,7 +1326,7 @@ async function storageStatus() {
 /* ---------- Drag & drop and folders (computers) ---------- */
 const EMBEDDED = window.top !== window.self || /[?&]embedded=1/.test(location.search);
 const isDesktop = () => matchMedia('(pointer:fine) and (hover:hover)').matches;
-const SONG_EXT = /\.(txt|text|cho|crd|chopro|pro|onsong)$/i;
+const SONG_EXT = /\.(txt|text|cho|crd|chopro|chordpro|pro|onsong)$/i;
 const DOC_EXT = /\.(docx?|rtf|odt|pdf|html?|webarchive)$/i;      // documents the Mac app can clean
 async function filesFromDrop(dt) {                        // walks dropped folders as well as plain files
   const entries = [...(dt.items || [])].map(i => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null)).filter(Boolean);
@@ -1477,12 +1541,12 @@ const pdfRule = (x1, x2, yTop, H, gray) => gray.toFixed(2) + ' G 0.6 w ' + x1.to
 function buildPDF(pages, title) {                             // pages: [{ w, h, ops: [] }]  ->  Uint8Array
   const objs = [], add = body => { objs.push(body); return objs.length; };
   add('<< /Type /Catalog /Pages 2 0 R >>'); add('');
-  ['Courier', 'Courier-Bold', 'Helvetica-Bold', 'Helvetica'].forEach(f => add('<< /Type /Font /Subtype /Type1 /BaseFont /' + f + ' /Encoding /WinAnsiEncoding >>'));
+  ['Courier', 'Courier-Bold', 'Helvetica-Bold', 'Helvetica', 'Helvetica-Oblique'].forEach(f => add('<< /Type /Font /Subtype /Type1 /BaseFont /' + f + ' /Encoding /WinAnsiEncoding >>'));
   const kids = [];
   pages.forEach(pg => {
     const st = pg.ops.join('\n');
     const c = add('<< /Length ' + st.length + ' >>\nstream\n' + st + '\nendstream');
-    kids.push(add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + pg.w.toFixed(2) + ' ' + pg.h.toFixed(2) + '] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents ' + c + ' 0 R >>') + ' 0 R');
+    kids.push(add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + pg.w.toFixed(2) + ' ' + pg.h.toFixed(2) + '] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R /F5 7 0 R >> >> /Contents ' + c + ' 0 R >>') + ' 0 R');
   });
   objs[1] = '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pages.length + ' >>';
   const info = add('<< /Title (' + pdfEsc(pdfPlain(title)) + ') /Producer (SongViewer) >>');
@@ -1497,9 +1561,10 @@ function buildPDF(pages, title) {                             // pages: [{ w, h,
 
 function pdfBlocks(rows, fs, maxCols, showCh) {               // rows from layoutSong -> blocks with a height, ready to place on a page
   const lead = fs * PDF.LEAD, blocks = [];
-  const group = (lines, cont) => blocks.push({ kind: 'group', lines, h: lines.length * lead + fs * (cont ? 0.04 : 0.34), top: fs * (cont ? 0.04 : 0.34) });
+  const group = (lines, cont) => blocks.push({ kind: 'group', lines, w: Math.max(0, ...lines.map(sg => sg.reduce((a, x) => a + x.t.length, 0))), h: lines.length * lead + fs * (cont ? 0.04 : 0.34), top: fs * (cont ? 0.04 : 0.34) });
   for (const r of rows) {
     if (r.k === 'blank') { blocks.push({ kind: 'blank', blank: true, h: lead * 0.55 }); continue; }
+    if (r.k === 'note') { blocks.push({ kind: 'note', h: fs * 1.25, text: pdfPlain(r.s) }); continue; }
     if (r.k === 'section') { blocks.push({ kind: 'section', keep: true, h: fs * 0.55 + fs * 1.15, text: pdfPlain(r.s).replace(/:\s*$/, '').toUpperCase() }); continue; }
     if (r.lines.length === 1 && r.lines[0].t === 'inline') {  // [G]word style: chords above the words, wrapped like any other line
       let ch = '', ly = '';
@@ -1546,7 +1611,7 @@ function pdfSong(song, shiftN, opt, paper) {                  // -> { pages: [{ 
   if (opt.fit) {
     for (let f = PDF.FS_MAX; f >= PDF.FS_MIN - 1e-9; f -= 0.25) {
       const c = tryFs(f);
-      if (c.blocks.reduce((a, b) => a + b.h, 0) <= availFirst) { fs = f; t = c; break; }
+      if (c.blocks.reduce((a, b) => a + b.h, 0) <= availFirst && c.blocks.every(b => !b.w || b.w <= Math.floor(W / (PDF.CW * f)))) { fs = f; t = c; break; }
     }
     if (!t) fs = PDF.FS_FLOW;                                 // too long for one page at any readable size: let it flow onto more pages
   }
@@ -1555,7 +1620,7 @@ function pdfSong(song, shiftN, opt, paper) {                  // -> { pages: [{ 
     const ops = [], lead = fs * PDF.LEAD, x0 = PDF.mx; let bodyTop;
     if (pi === 0) {
       ops.push(pdfOp('F3', tfs, x0, PDF.top + tfs * 0.92, H, pdfPlain(head.title)));
-      ops.push(pdfOp('F4', 10.5, x0, PDF.top + tfs * 1.2 + 11, H, pdfPlain([head.artist, head.capo, 'Key: ' + head.key + (head.key !== head.origKey ? '  (original ' + head.origKey + ')' : '')].filter(Boolean).join('   ·   '))));
+      ops.push(pdfOp('F4', 10.5, x0, PDF.top + tfs * 1.2 + 11, H, pdfPlain([head.artist, head.capo, head.tempo ? 'Tempo ' + head.tempo : '', 'Key: ' + head.key + (head.key !== head.origKey ? '  (original ' + head.origKey + ')' : '')].filter(Boolean).join('   ·   '))));
       ops.push(pdfRule(x0, x0 + W, PDF.top + headerH - 6, H, 0.55));
       bodyTop = PDF.top + headerH;
     } else {
@@ -1565,7 +1630,8 @@ function pdfSong(song, shiftN, opt, paper) {                  // -> { pages: [{ 
     }
     for (const { b, y } of items) {
       const yt = bodyTop + y;
-      if (b.kind === 'section') ops.push(pdfOp('F3', fs * 0.92, x0, yt + fs * 0.55 + fs * 0.9, H, b.text));
+      if (b.kind === 'note') ops.push('0.35 g ' + pdfOp('F5', fs * 0.92, x0, yt + fs * 1.0, H, b.text) + ' 0 g');
+      else if (b.kind === 'section') ops.push(pdfOp('F3', fs * 0.92, x0, yt + fs * 0.55 + fs * 0.9, H, b.text));
       else if (b.kind === 'group') b.lines.forEach((segs, k) => {
         let x = x0; const base = yt + b.top + k * lead + fs * 0.92;
         segs.forEach(sg => { ops.push(pdfOp(sg.f, fs, x, base, H, sg.t)); x += PDF.CW * fs * sg.t.length; });
