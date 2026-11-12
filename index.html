@@ -262,7 +262,7 @@ const KEYLINE_RE = /^\s*(?:key\s*(?:of)?\s*[:\-]?\s*)([A-G][#b]?)(m(?!aj)(?:in)?
 
 // "Word-document" style: the lyric comes first and its chords follow at the end of the same line, in brackets,
 // separated by commas, dashes, dots or spaces:  "lonely as a train [C], [C], [F], [F]".
-const SEP_ONLY = /^[\s,.\-–—_…]*$/;
+const SEP_ONLY = /^(?:[\s,.\-–—_…]|\(\s*(?:stop|pause)\s*\))*$/i;      // between chords: separators and (Stop) / (Pause) marks
 function splitTrail(line) {
   const re = /\[([^\]]*)\]/g, br = []; let m;
   while ((m = re.exec(line))) br.push({ i: m.index, e: m.index + m[0].length, chord: CHORD_RE.test(m[1]) });
@@ -282,7 +282,7 @@ function isChordLine(line) {
   for (const t of toks) {
     const base = t.replace(/\*+$/, '');
     if (base && CHORD_RE.test(base)) chords++;
-    else if (!/^(\||\/|-|x\d+|\d+x|N\.?C\.?|%|\(|\)|\*+)+$/i.test(t)) return false;
+    else if (!/^(\||\/|-|x\d+|\d+x|N\.?C\.?|%|\(|\)|\*+|\(\s*(?:stop|pause)\s*\)[.,]*)+$/i.test(t)) return false;
   }
   return chords > 0;
 }
@@ -1269,7 +1269,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v21 · 11 Nov 20:59';   // bump on every commit
+const APP_VERSION = 'v22 · 12 Nov 10:53';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
