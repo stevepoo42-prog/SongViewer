@@ -1269,7 +1269,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v22 · 12 Nov 10:53';   // bump on every commit
+const APP_VERSION = 'v23 · 12 Nov 11:28';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
@@ -1899,7 +1899,14 @@ async function initApp() {
 }
 initApp();
 window.svHost = {                                          // called by the Mac app (ChordClean)
-  addSongs: async list => { await handleFiles((list || []).map(x => new File([x.text], x.name, { type: 'text/plain' }))); },
+  addSongs: async arg => {                                    // a list of songs, or { list, open: true } to also show the (single) song afterwards
+    const list = Array.isArray(arg) ? arg : ((arg && arg.list) || []);
+    await handleFiles(list.map(x => new File([x.text], x.name, { type: 'text/plain' })));
+    if (arg && arg.open && list.length === 1) {
+      const e = library.find(s => s.name === list[0].name);
+      if (e) { closeLib(); selectSong(e.id); }
+    }
+  },
   importBackup: async o => { await importBackupFile(new File([o.text], o.name, { type: 'application/json' })); },
   exportBackup: () => exportBackup(),
   openLibrary: () => openLib(),
