@@ -531,7 +531,7 @@ function layoutSong(song, shiftN, o) {
     else if (l.t === 'note') { flushPend(); items.push({ k: 'note', s: l.s }); }
     else if (l.t === 'endsec') { flushPend(); items.push({ k: 'endsec' }); }
     else if (l.t === 'verb') { flushPend(); items.push({ k: 'unit', t: 'verb', s: l.s }); }
-    else if (l.t === 'trail') { flushPend(); items.push({ k: 'unit', t: 'trail', lead: l.lead, cl: l.cl.replace(/\[([^\]]*)\]/g, (m, c) => CHORD_RE.test(c) ? '[' + transposeChord(c, shiftN, flats) + ']' : m) }); }
+    else if (l.t === 'trail') { flushPend(); items.push({ k: 'unit', t: 'trail', lead: l.lead, cl: l.cl.replace(/\[([^\]]*)\]/g, (m, c) => CHORD_RE.test(c) ? transposeChord(c, shiftN, flats) : m) }); }      // chords shown without the [ ] (they are only there so other apps can find them)
     else { items.push({ k: 'unit', t: 'inline', segs: l.segs.map(g => ({ c: g.c ? transposeChord(g.c, shiftN, flats) : '', l: g.l })) }); pend = null; }
   }
   flushPend();
@@ -1269,7 +1269,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v23 · 12 Nov 11:28';   // bump on every commit
+const APP_VERSION = 'v24 · 20 Nov 22:35';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
