@@ -191,6 +191,8 @@
     <button id="reset">Original key</button>
     <button id="up">+ ½ step</button>
   </div>
+  <div class="row" style="margin-top:10px"><button id="toggleCapo">Capo follows key: off</button></div>
+  <div class="note" style="margin-top:6px;font-size:.8em;opacity:.7">On: the chords stay as written and the capo number moves with the key.</div>
   </section>
   <section>
   <h2>Display</h2>
@@ -515,24 +517,27 @@ const secKey = n => {
    Used for the screen (build) and for PDF printing. o = { maxCols, showCh, join, wrap } */
 function layoutSong(song, shiftN, o) {
   const { maxCols, showCh, join, wrap } = o;
-  const flats = flatsFor(song, shiftN);
-  const nowKey = keyLabel((noteIndex(song.key[0], song.key[1] || '') + shiftN) % 12, song.minor, flats);
+  const keep = !!o.capo && shiftN !== 0;                       // "capo follows key": the chord shapes stay as written and the capo number moves instead
+  const cs = keep ? 0 : shiftN;                                // the shift applied to the chords themselves
+  const flats = flatsFor(song, cs), keyFlats = flatsFor(song, shiftN);
+  const nowKey = keyLabel((noteIndex(song.key[0], song.key[1] || '') + shiftN) % 12, song.minor, keyFlats);
+  const capoTxt = keep ? (((+((/\d+/.exec(song.capo || '') || [0])[0]) + shiftN) % 12 + 12) % 12 ? 'Capo ' + (((+((/\d+/.exec(song.capo || '') || [0])[0]) + shiftN) % 12 + 12) % 12) : '') : (song.capo || '');
   const origKey = keyLabel(noteIndex(song.key[0], song.key[1] || ''), song.minor, flatsFor(song, 0));
-  const head = { title: song.title, artist: song.artist || '', capo: song.capo || '', tempo: song.tempo || '', key: nowKey, origKey,
-    meta: [song.artist, song.capo, song.tempo ? 'Tempo ' + song.tempo : '', 'Key: ' + nowKey + (shiftN ? '  (original ' + origKey + ')' : '')].filter(Boolean).join('  ·  ') };
+  const head = { title: song.title, artist: song.artist || '', capo: capoTxt, tempo: song.tempo || '', key: nowKey, origKey,
+    meta: [song.artist, capoTxt, song.tempo ? 'Tempo ' + song.tempo : '', 'Key: ' + nowKey + (shiftN ? '  (original ' + origKey + ')' : '')].filter(Boolean).join('  ·  ') };
 
   // pass 1: turn parsed lines into items
   const items = []; let pend = null;
   const flushPend = () => { if (pend != null) { items.push({ k: 'unit', t: 'chordonly', c: pend, s: '' }); pend = null; } };
   for (const l of song.lines) {
     if (l.t === 'blank' || l.t === 'section') { flushPend(); items.push({ k: l.t, s: l.s }); }
-    else if (l.t === 'chords') { flushPend(); pend = transposeChordLine(l.s, shiftN, flats); }
+    else if (l.t === 'chords') { flushPend(); pend = transposeChordLine(l.s, cs, flats); }
     else if (l.t === 'lyric') { items.push({ k: 'unit', t: 'lyric', c: pend, s: l.s }); pend = null; }
     else if (l.t === 'note') { flushPend(); items.push({ k: 'note', s: l.s }); }
     else if (l.t === 'endsec') { flushPend(); items.push({ k: 'endsec' }); }
     else if (l.t === 'verb') { flushPend(); items.push({ k: 'unit', t: 'verb', s: l.s }); }
-    else if (l.t === 'trail') { flushPend(); items.push({ k: 'unit', t: 'trail', lead: l.lead, cl: l.cl.replace(/\[([^\]]*)\]/g, (m, c) => CHORD_RE.test(c) ? transposeChord(c, shiftN, flats) : m) }); }      // chords shown without the [ ] (they are only there so other apps can find them)
-    else { items.push({ k: 'unit', t: 'inline', segs: l.segs.map(g => ({ c: g.c ? transposeChord(g.c, shiftN, flats) : '', l: g.l })) }); pend = null; }
+    else if (l.t === 'trail') { flushPend(); items.push({ k: 'unit', t: 'trail', lead: l.lead, cl: l.cl.replace(/\[([^\]]*)\]/g, (m, c) => CHORD_RE.test(c) ? transposeChord(c, cs, flats) : m) }); }      // chords shown without the [ ] (they are only there so other apps can find them)
+    else { items.push({ k: 'unit', t: 'inline', segs: l.segs.map(g => ({ c: g.c ? transposeChord(g.c, cs, flats) : '', l: g.l })) }); pend = null; }
   }
   flushPend();
 
@@ -598,7 +603,7 @@ function layoutSong(song, shiftN, o) {
       if (j) { add(j); i++; } else add(it);
     }
   }
-  return { head, rows, flats };
+  return { head, rows, flats: keyFlats };
 }
 
 function renderRows(rows, frag) {                      // the on-screen look of a laid-out song
@@ -640,7 +645,7 @@ function build() {
   const probe = mk('div', 'line', '0'.repeat(50)); probe.style.cssText = 'position:absolute;visibility:hidden';
   document.body.appendChild(probe); const charW = probe.getBoundingClientRect().width / 50; probe.remove();
   const maxCols = Math.floor((window.innerWidth - 52) / charW);
-  const L = layoutSong(curSong, shift, { maxCols, showCh, join: joinMode, wrap: wrapOn });
+  const L = layoutSong(curSong, shift, { maxCols, showCh, join: joinMode, wrap: wrapOn, capo: capoOn });
   const frag = document.createDocumentFragment();
   const h = document.createElement('h1'); h.textContent = L.head.title; frag.appendChild(h);
   const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = L.head.meta; frag.appendChild(meta);
@@ -1269,7 +1274,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v24 · 20 Nov 22:35';   // bump on every commit
+const APP_VERSION = 'v25 · 20 Nov 22:42';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
@@ -1605,14 +1610,14 @@ function pdfPaginate(blocks, firstAvail, nextAvail) {
   }
   return pages;
 }
-function pdfSong(song, shiftN, opt, paper) {                  // -> { pages: [{ ops }], fs }
+function pdfSong(song, shiftN, opt, paper, capo) {                  // -> { pages: [{ ops }], fs }
   const W = paper.w - 2 * PDF.mx, H = paper.h;
   const tryFs = f => {
     const maxCols = Math.floor(W / (PDF.CW * f));
-    const L = layoutSong(song, shiftN, { maxCols, showCh: opt.chords, join: opt.join, wrap: true });
+    const L = layoutSong(song, shiftN, { maxCols, showCh: opt.chords, join: opt.join, wrap: true, capo });
     return { L, blocks: pdfBlocks(L.rows, f, maxCols, opt.chords) };
   };
-  const head = layoutSong(song, shiftN, { maxCols: 80, showCh: opt.chords, join: false, wrap: true }).head;
+  const head = layoutSong(song, shiftN, { maxCols: 80, showCh: opt.chords, join: false, wrap: true, capo }).head;
   const tfs = Math.max(12, Math.min(20, W / (Math.max(1, head.title.length) * 0.6)));
   const headerH = tfs * 1.2 + 13 + 14, contH = 26;
   const availFirst = H - PDF.top - headerH - PDF.bottom, availNext = H - PDF.top - contH - PDF.bottom;
@@ -1678,7 +1683,7 @@ function buildListsPDF(lists, opt) {
   const paper = PDF_PAPER[opt.paper] || PDF_PAPER.a4;
   const secs = lists.map(lst => {
     const songs = lst.ids.map(songById).filter(Boolean);
-    const built = songs.map(e => pdfSong(parseSong(e.name, e.text), e.shift || 0, opt, paper));
+    const built = songs.map(e => pdfSong(parseSong(e.name, e.text), e.shift || 0, opt, paper, !!(prefs[e.id] && prefs[e.id].capo)));
     const keys = songs.map((e, i) => { const h = layoutSong(parseSong(e.name, e.text), e.shift || 0, { maxCols: 80, showCh: true, join: false, wrap: true }).head; return h.key; });
     return { lst, songs, built, keys, start: [] };
   });
@@ -1749,7 +1754,7 @@ function fit() {
   else if (fits()) fit.warned = false;
 }
 /* ---------- Per-song display settings ---------- */
-const DEF0 = { fs: 26, lh: 1, fit: false, join: true, nochords: false, spd: 12, wrap: true };
+const DEF0 = { fs: 26, lh: 1, fit: false, join: true, nochords: false, spd: 12, wrap: true, capo: false };
 let defaults = { ...DEF0 };       // used by songs that have no settings of their own
 let prefs = {};                   // { songId: { fs, lh, fit, join, nochords } } - only what you changed for that song
 const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
@@ -1792,7 +1797,7 @@ function applyChords(off) {
   $('toggleChords').textContent = off ? 'Show chords' : 'Hide chords';
 }
 function applyPrefs() {            // switch the whole display to the open song's settings
-  applySize(eff('fs')); applyLH(eff('lh')); applyJoin(eff('join')); applyFit(eff('fit')); applyChords(eff('nochords')); applySpeed(eff('spd')); applyWrap(eff('wrap'));
+  applySize(eff('fs')); applyLH(eff('lh')); applyJoin(eff('join')); applyFit(eff('fit')); applyChords(eff('nochords')); applySpeed(eff('spd')); applyWrap(eff('wrap')); applyCapo(eff('capo'));
   updatePrefNote();
 }
 function setSize(px) { applySize(px); remember('fs', px); refresh(); }
@@ -1803,11 +1808,18 @@ function applyWrap(on) {
   $('toggleWrap').classList.toggle('primary', on);
 }
 function setWrap(on) { applyWrap(on); remember('wrap', on); refresh(); }
+let capoOn = false;
+function applyCapo(on) {
+  capoOn = !!on;
+  $('toggleCapo').textContent = 'Capo follows key: ' + (on ? 'on' : 'off');
+  $('toggleCapo').classList.toggle('primary', !!on);
+}
+function setCapo(on) { applyCapo(on); remember('capo', on); refresh(); }
 function setJoin(on) { applyJoin(on); remember('join', on); refresh(); }
 function setFit(on) { if (!on) applySize(eff('fs')); applyFit(on); remember('fit', on); refresh(); }
 function toggleChords() { const off = !document.body.classList.contains('nochords'); applyChords(off); remember('nochords', off); refresh(); }
 function saveDefaults() {
-  defaults = { fs: eff('fs'), lh: eff('lh'), fit: eff('fit'), join: eff('join'), nochords: eff('nochords'), spd: eff('spd'), wrap: eff('wrap') };
+  defaults = { fs: eff('fs'), lh: eff('lh'), fit: eff('fit'), join: eff('join'), nochords: eff('nochords'), spd: eff('spd'), wrap: eff('wrap'), capo: eff('capo') };
   lsSet('sv.def', JSON.stringify(defaults)); toast('Saved as the default for songs without their own settings');
 }
 function resetSongPrefs() {
@@ -1837,6 +1849,7 @@ $('toggleChords').onclick = () => toggleChords();
 $('toggleWrap').onclick = () => setWrap(!wrapOn);
 $('saveDef').onclick = saveDefaults; $('resetSong').onclick = resetSongPrefs;
 $('toggleJoin').onclick = () => setJoin(!joinMode);
+$('toggleCapo').onclick = () => setCapo(!capoOn);
 $('toggleFit').onclick = () => setFit(!autofit);
 window.addEventListener('resize', onResize);
 $('toggleWake').onclick = () => setWake(!wakeWanted);
