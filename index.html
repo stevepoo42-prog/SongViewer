@@ -451,6 +451,28 @@ function wrapTrail(lead, cl, max, wrap = wrapOn) {                  // lyric + i
   if (!cl) return out;
   const last = out[out.length - 1];
   if (last && cl.length <= max - last.s.length - 1) { last.s += ' '; last.cl = cl; return out; }
+  // the chords do not fit after the last piece of lyric: split the lyric again so the chords have room on the last line
+  const avail = max - PFX.length - cl.length - 1;
+  if (avail >= 8) {
+    const ws = []; { const re = /\S+/g; let m; while ((m = re.exec(L))) ws.push(m.index); }
+    let k = ws.length;                                              // first word that goes on the last line
+    while (k > 1 && L.length - ws[k - 1] <= avail) k--;
+    if (k < ws.length && L.length - ws[k] <= avail) {
+      if (ws[k] <= max) {                                           // two lines: put the break where the two lines come out most even
+        let bestK = k, bestD = Infinity;
+        for (let j = k; j < ws.length; j++) {
+          const h = L.slice(0, ws[j]).replace(/\s+$/, '').length, t = PFX.length + (L.length - ws[j]) + 1 + cl.length;
+          if (h > max || t > max) continue;
+          const d = Math.abs(h - t); if (d < bestD) { bestD = d; bestK = j; }
+        }
+        k = bestK;
+      }
+      const head = L.slice(0, ws[k]).replace(/\s+$/, ''), tail = L.slice(ws[k]);
+      const res = splitWords(head, max, max - PFX.length).map((g, i) => ({ s: (i ? PFX : '') + head.slice(g.a, g.b), cl: '' }));
+      res.push({ s: PFX + tail + ' ', cl });
+      return res;
+    }
+  }
   const pieces = splitWords(cl.trim(), max - (last ? PFX.length : 0), max - PFX.length);
   pieces.forEach((g, i) => out.push({ s: (last || i) ? PFX : '', cl: cl.trim().slice(g.a, g.b) }));
   return out;
@@ -576,7 +598,9 @@ function layoutSong(song, shiftN, o) {
     if (u.t === 'trail') {
       wrapTrail(u.lead, showCh ? u.cl : '', maxCols, wrap).forEach((ln, i) => {
         if (!ln.s.trim() && !ln.cl) return;
-        rows.push({ k: 'group', sec: cur, cont: i > 0, lines: [{ t: 'trail', s: ln.s, cl: ln.cl }] });
+        let ts = ln.s;
+        if (ln.cl && wrap && maxCols >= 24) { ts = ts.replace(/\s+$/, ''); ts += ' '.repeat(Math.max(1, maxCols - ts.length - ln.cl.length)); }     // pad so the chords end at the right edge
+        rows.push({ k: 'group', sec: cur, cont: i > 0, lines: [{ t: 'trail', s: ts, cl: ln.cl }] });
       });
     } else if (u.t === 'verb') {                           // tab / grid line: shown exactly as written
       rows.push({ k: 'group', sec: cur, cont: true, lines: [{ t: 'lyric', s: u.s }] });
@@ -1274,7 +1298,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v25 · 20 Nov 22:42';   // bump on every commit
+const APP_VERSION = 'v27 · 21 Nov 11:30';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
