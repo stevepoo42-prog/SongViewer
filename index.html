@@ -225,6 +225,7 @@
     <button id="nextSong">Next ▶</button>
   </div>
   <div class="row" style="margin-top:8px"><button id="editDetails">Edit title &amp; artist…</button></div>
+  <div class="row" style="margin-top:8px"><button id="exportRtf">Export song to edit (rich text)…</button></div>
   <div class="row" style="margin-top:14px"><button id="previewIpad" hidden>Preview as iPad (on this computer)</button><button id="reloadApp">Reload latest version</button></div>
   <p class="info" id="verInfo" style="white-space:pre-line"></p>
   </section>
@@ -234,7 +235,7 @@
 
 <input id="folderIn" type="file" webkitdirectory multiple hidden>
 <input id="importFile" type="file" accept=".json,application/json" hidden>
-<input id="file" type="file" accept=".txt,.text,.cho,.crd,.chopro,.chordpro,.pro,.onsong,text/plain" multiple hidden>
+<input id="file" type="file" accept=".txt,.text,.cho,.crd,.chopro,.chordpro,.pro,.onsong,.rtf,text/plain,text/rtf,application/rtf" multiple hidden>
 
 <script>
 'use strict';
@@ -732,9 +733,17 @@ function expandSongFile(name, text) {
   return parts.map((p, i) => ({ name: nameOf(p, i), text: p + '\n' }));
 }
 async function addFiles(files) {
-  let n = 0;
+  let n = 0, reopen = false;
   for (const f of files) {
-    const text = await f.text();
+    let text = await f.text();
+    if (EDIT_RE.test(f.name)) {                              // an exported song coming back: replace it, keeping its key, books and sets
+      if (/^\{\\rtf/.test(text)) text = rtfToText(text);
+      if (!text.trim()) continue;
+      const ex = entryFor(f.name);
+      if (ex) { ex.text = text; reopen = reopen || ex.id === curId; }
+      else library.push({ id: 's' + Date.now() + Math.random().toString(36).slice(2, 6), name: editedTitle(f.name) + '.txt', text, shift: 0 });
+      n++; continue;
+    }
     for (const part of expandSongFile(f.name, text)) {
       const ex = library.find(s => s.name === part.name);
       if (ex) ex.text = part.text;
@@ -744,7 +753,7 @@ async function addFiles(files) {
   }
   library.sort((a, b) => a.name.localeCompare(b.name));
   saveLib(); toast('Added ' + n + ' song' + (n === 1 ? '' : 's'));
-  if (!curSong && library[0]) selectSong(library[0].id); else updateNav();
+  if (reopen) selectSong(curId); else if (!curSong && library[0]) selectSong(library[0].id); else updateNav();
   renderLibrary();
   return n;
 }
@@ -987,6 +996,43 @@ async function editDetails(id, fresh) {
   saveLib(); saveBS();
   if (id === curId) { curSong = parseSong(e.name, e.text); render(); updateNav(); }
   renderLibrary(); toast('Saved “' + songTitle(e) + '”');
+}
+
+/* --- export a song to rich text, tweak it, bring it back --- */
+const EDIT_RE = /\s-\sedit(?:[ -]?\(?\d+\)?)?\.(?:rtf|rtfd|docx?|txt)$/i;        // "Song - edit.rtf" is a song coming back
+const editedTitle = name => name.replace(EDIT_RE, '').normalize('NFC');   // macOS may spell "é" in a file name as two characters
+const entryFor = name => library.find(EDIT_RE.test(name) ? s => songTitle(s).normalize('NFC') === editedTitle(name) : s => s.name === name);
+function textToRtf(text) {                                     // fixed-width font, so chords stay over their words
+  const body = text.replace(/\r\n?/g, '\n').replace(/[\\{}]/g, '\\$&').replace(/\t/g, '\\tab ')
+    .replace(/[^\x00-\x7f]/g, c => '\\uc1\\u' + (c.charCodeAt(0) << 16 >> 16) + '?').replace(/\n/g, '\\\n');
+  return '{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fmodern\\fcharset0 Menlo-Regular;}}\n\\paperw11906\\paperh16838\\margl720\\margr720\n\\f0\\fs24 ' + body + '}';
+}
+function rtfToText(rtf) {                                      // the words only: enough for what TextEdit, Pages and Word write
+  const re = /\\([a-z]+)(-?\d+)? ?|\\'([0-9a-f]{2})|\\(\r\n|\r|\n)|\\([^a-z])|([{}])|[\r\n]+|([^\\{}\r\n]+)/gi;
+  const hidden = /^(?:fonttbl|colortbl|expandedcolortbl|stylesheet|info|pict|object|header[lrf]?|footer[lrf]?|listtable|listoverridetable|fldinst|themedata|datastore|latentstyles|generator|xmlnstbl|rsidtbl)$/;
+  const WORDS = { par: '\n', line: '\n', sect: '\n', page: '\n', tab: '\t', emdash: '—', endash: '–', lquote: '‘', rquote: '’', ldblquote: '“', rdblquote: '”', bullet: '•' };
+  const cp = new TextDecoder('windows-1252'), stack = [];
+  let st = { skip: false, uc: 1 }, fallback = 0, out = '', m;
+  const put = t => { if (!st.skip) out += t; };
+  while ((m = re.exec(rtf))) {
+    const [, word, num, hex, newline, sym, brace, text] = m;
+    if (brace === '{') { stack.push({ ...st }); fallback = 0; }
+    else if (brace === '}') { st = stack.pop() || st; fallback = 0; }
+    else if (word) {
+      if (hidden.test(word)) st.skip = true;
+      else if (word === 'u') { put(String.fromCharCode((+num + 65536) % 65536)); fallback = st.uc; }
+      else if (word === 'uc') st.uc = +num;
+      else if (WORDS.hasOwnProperty(word)) put(WORDS[word]);
+    } else if (hex) { if (fallback) fallback--; else put(cp.decode(new Uint8Array([parseInt(hex, 16)]))); }
+    else if (newline) put('\n');
+    else if (sym) { if (sym === '*') st.skip = true; else if ('\\{}'.includes(sym)) put(sym); else if (sym === '~') put(' '); else if (sym === '_') put('-'); }
+    else if (text) { const cut = Math.min(fallback, text.length); fallback -= cut; put(text.slice(cut)); }
+  }
+  return out.replace(/ /g, ' ').replace(/\n*$/, '\n');
+}
+async function exportSongRtf(id) {
+  const e = songById(id); if (!e) { toast('No song open'); return; }
+  if (await shareFile(songTitle(e) + ' - edit.rtf', textToRtf(e.text), 'application/rtf')) toast('Exported. Edit it, then add it back to replace this song.');
 }
 
 /* --- the library screen --- */
@@ -1355,7 +1401,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v28 · 27 Nov';   // bump on every commit
+const APP_VERSION = 'v29 · 27 Nov';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
@@ -1438,7 +1484,7 @@ async function filesFromDrop(dt) {                        // walks dropped folde
   return out;
 }
 async function handleFiles(files) {                       // songs go to the library, a backup file goes to Import
-  const songs = files.filter(f => SONG_EXT.test(f.name) || f.type === 'text/plain');
+  const songs = files.filter(f => SONG_EXT.test(f.name) || f.type === 'text/plain' || (!HOST && EDIT_RE.test(f.name) && /\.rtf$/i.test(f.name)));
   const backups = files.filter(f => /\.json$/i.test(f.name));
   const docs = HOST ? files.filter(f => DOC_EXT.test(f.name) && !songs.includes(f)) : [];       // Word/RTF/PDF: the Mac app cleans them
   const skipped = files.length - songs.length - backups.length - docs.length;
@@ -1960,6 +2006,7 @@ $('song').addEventListener('pointerup', e => {
 $('openLib').onclick = openLib; $('openLib0').onclick = openLib; $('libClose').onclick = closeLib;
 document.querySelectorAll('#libTabs button').forEach(b => { b.onclick = () => setTab(b.dataset.tab); });
 $('editDetails').onclick = () => { closePanel(); editDetails(curId); };
+$('exportRtf').onclick = () => { closePanel(); exportSongRtf(curId); };
 $('prevSong').onclick = () => stepSong(-1); $('nextSong').onclick = () => stepSong(1);
 $('file').addEventListener('change', async e => { await addFiles([...e.target.files]); e.target.value = ''; });
 // hardware keyboard / Bluetooth pedal friendly: arrows change key, Escape closes
@@ -1998,7 +2045,7 @@ window.svHost = {                                          // called by the Mac 
     const list = Array.isArray(arg) ? arg : ((arg && arg.list) || []);
     await handleFiles(list.map(x => new File([x.text], x.name, { type: 'text/plain' })));
     if (arg && arg.open && list.length === 1) {
-      const e = library.find(s => s.name === list[0].name);
+      const e = entryFor(list[0].name);
       if (e) { closeLib(); selectSong(e.id); if (arg.edit) editDetails(e.id, true); }   // not awaited: the app need not wait for the typing
     }
   },
