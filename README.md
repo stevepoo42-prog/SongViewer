@@ -8,6 +8,7 @@ ChordClean and **ChordPro** files.
   screen edges or a pedal
 - Chords above the lyrics, inline `[G]word` (ChordPro), or at the end of the line `[C], [C], [F], [F]`; tap near the top for the controls and pick a
   key: all chords transpose (flats/sharps chosen to suit the key)
+- **Edit title & artist** from the controls; the Mac app asks for them straight after Clean Clipboard. They are saved in the song as `{title:}` / `{artist:}`
 - Section colours (Intro, Verse, Chorus, Bridge, Solo, Outro); chords always yellow
 - Auto-fit to the screen, long lines wrap onto a ` - ` line, short lines can be joined; text size, spacing and the rest are remembered per song
 - Hands-free: auto-scroll, edge taps, pedal keys

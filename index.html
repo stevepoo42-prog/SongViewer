@@ -224,6 +224,7 @@
     <div class="info" id="navInfo" style="text-align:center"></div>
     <button id="nextSong">Next ▶</button>
   </div>
+  <div class="row" style="margin-top:8px"><button id="editDetails">Edit title &amp; artist…</button></div>
   <div class="row" style="margin-top:14px"><button id="previewIpad" hidden>Preview as iPad (on this computer)</button><button id="reloadApp">Reload latest version</button></div>
   <p class="info" id="verInfo" style="white-space:pre-line"></p>
   </section>
@@ -315,7 +316,7 @@ function parseSong(name, text) {
     env = null;
   };
   const setMeta = (k, v) => {
-    if (k === 'title' || k === 't') { song.title = v; sawTitle = true; }
+    if (k === 'title' || k === 't') { song.title = v; sawTitle = song.titleSet = true; }
     else if (k === 'subtitle' || k === 'st') song._subtitle = v;
     else if (k === 'artist') song._artist = v;
     else if (k === 'composer' || k === 'lyricist' || k === 'arranger') song._composer = song._composer || v;
@@ -378,9 +379,9 @@ function parseSong(name, text) {
       continue;
     }
 
-    if (sawTitle && !song.artist && !song.lines.length && !isChordLine(line) && !SECTION_RE.test(line) && !/\[[A-G]/.test(line) && i > 0 && i === titleIdx + 1) { song.artist = line.trim(); continue; }
+    if (sawTitle && !song.artist && !song.lines.length && !isChordLine(line) && !SECTION_RE.test(line) && !/\[[A-G]/.test(line) && i > 0 && i === titleIdx + 1) { song.artist = line.trim(); song.artistLine = i; continue; }
     // first plain line = title (if no directive gave one), second plain line directly after = artist
-    if (!sawTitle && !song.lines.some(l => l.t !== 'blank')) { song.title = line.trim().replace(/\s+chords?$/i, ''); sawTitle = true; titleIdx = i; continue; }
+    if (!sawTitle && !song.lines.some(l => l.t !== 'blank')) { song.title = line.trim().replace(/\s+chords?$/i, ''); sawTitle = true; titleIdx = song.titleLine = i; continue; }
     song.lines.push({ t: 'lyric', s: line.replace(/\s+$/, '') });
   }
 
@@ -932,6 +933,62 @@ async function addSongsToView() {
   saveBS(); renderLibrary(); updateNav(); toast('Added ' + added);
 }
 
+/* --- title & artist --- */
+const cleanDetail = v => v.replace(/[{}\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+/* The details are stored in the song text as {title:} / {artist:}, so they travel with backups and shared sets.
+   Lines the parser had taken as title / artist are dropped, or kept as lyrics when keepLines is true. */
+function withDetails(name, text, title, artist, keepLines) {
+  const song = parseSong(name, text);
+  const taken = keepLines ? [] : [song.titleLine, song.artistLine].filter(i => i !== undefined);
+  const body = text.replace(/\r\n?/g, '\n').split('\n')
+    .filter((l, i) => !taken.includes(i) && !/^\s*\{\s*(?:meta\s*:?\s*)?(?:title|t|artist)\b[^}]*\}\s*$/i.test(l));
+  const head = ['{title: ' + title + '}']; if (artist) head.push('{artist: ' + artist + '}');
+  return head.concat(body).join('\n');
+}
+function askDetails(song, text, fresh) {
+  const raw = text.replace(/\r\n?/g, '\n').split('\n');
+  const taken = [song.titleLine, song.artistLine].filter(i => i !== undefined).map(i => raw[i].trim());
+  return dialog((box, close) => {
+    box.appendChild(mk('h3', '', 'Title and artist'));
+    const field = (label, value) => {
+      const i = document.createElement('input'); i.type = 'text'; i.value = value; i.placeholder = label; i.className = 'dtext';
+      i.setAttribute('aria-label', label); i.onkeydown = e => { if (e.key === 'Enter') ok(); };
+      box.append(mk('p', 'info', label), i); return i;
+    };
+    // a title borrowed from the file name is no use for a fresh paste, or when the name is really a lyric or chords
+    const borrowed = !song.titleSet && song.titleLine === undefined && (fresh || /\[/.test(song.title) || isChordLine(song.title));
+    const t = field('Title', borrowed ? '' : song.title);
+    const a = field('Artist', song._artist || song._composer || (song.artistLine !== undefined ? song.artist : ''));
+    let keep = null;
+    if (taken.length) {                                    // pasted lyrics often have no heading: don't lose their first line
+      const lab = mk('label', 'lrow'); keep = document.createElement('input'); keep.type = 'checkbox';
+      let ticked = false; keep.onchange = () => { ticked = true; };
+      const sync = () => { if (!ticked) keep.checked = cleanDetail(t.value) !== cleanDetail(song.title); };   // a new title means those lines were lyrics
+      t.oninput = sync; sync();
+      const words = mk('span', 'lname', 'Keep as lyrics: “' + taken.join('” / “') + '”'); words.style.whiteSpace = 'normal';
+      lab.append(keep, words);
+      box.appendChild(lab);
+    }
+    const ok = () => { if (cleanDetail(t.value)) close({ title: cleanDetail(t.value), artist: cleanDetail(a.value), keep: !!(keep && keep.checked) }); else t.focus(); };
+    const row = mk('div', 'row'); row.append(btn('Cancel', () => close(null)), btn('Save', ok, 'primary'));
+    box.appendChild(row); setTimeout(() => { t.focus(); t.select(); }, 60);
+  });
+}
+async function editDetails(id, fresh) {
+  const e = songById(id); if (!e) { toast('No song open'); return; }
+  const d = await askDetails(parseSong(e.name, e.text), e.text, fresh); if (!d || !songById(id)) return;
+  const ext = (/\.[^.]+$/.exec(e.name) || ['.txt'])[0];
+  const base = ((d.artist ? d.artist + ' - ' : '') + d.title).replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100) || 'Song';
+  let name = base + ext;
+  for (let n = 2; library.some(s => s.id !== id && s.name === name); n++) name = base + ' ' + n + ext;   // never merge two songs by renaming
+  e.text = withDetails(e.name, e.text, d.title, d.artist, d.keep); e.name = name;
+  library.sort((x, y) => x.name.localeCompare(y.name));
+  books.forEach(b => b.ids.sort((x, y) => songTitle(songById(x) || e).localeCompare(songTitle(songById(y) || e))));
+  saveLib(); saveBS();
+  if (id === curId) { curSong = parseSong(e.name, e.text); render(); updateNav(); }
+  renderLibrary(); toast('Saved “' + songTitle(e) + '”');
+}
+
 /* --- the library screen --- */
 function openLib() { lib.open = true; $('libScreen').style.display = 'flex'; closePanel(); renderLibrary(); }
 function closeLib() { lib.open = false; $('libScreen').style.display = 'none'; if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); }
@@ -1298,7 +1355,7 @@ $('pull').addEventListener('click', openPanel);                       // tap nea
 });
 
 /* ---------- Version ---------- */
-const APP_VERSION = 'v27 · 21 Nov 11:30';   // bump on every commit
+const APP_VERSION = 'v28 · 27 Nov';   // bump on every commit
 $('ver').textContent = APP_VERSION;
 $('verInfo').textContent = 'Running ' + APP_VERSION + '. Reload fetches the newest files and keeps your songs and settings.';
 $('reloadApp').onclick = async () => {
@@ -1902,6 +1959,7 @@ $('song').addEventListener('pointerup', e => {
 });
 $('openLib').onclick = openLib; $('openLib0').onclick = openLib; $('libClose').onclick = closeLib;
 document.querySelectorAll('#libTabs button').forEach(b => { b.onclick = () => setTab(b.dataset.tab); });
+$('editDetails').onclick = () => { closePanel(); editDetails(curId); };
 $('prevSong').onclick = () => stepSong(-1); $('nextSong').onclick = () => stepSong(1);
 $('file').addEventListener('change', async e => { await addFiles([...e.target.files]); e.target.value = ''; });
 // hardware keyboard / Bluetooth pedal friendly: arrows change key, Escape closes
@@ -1936,12 +1994,12 @@ async function initApp() {
 }
 initApp();
 window.svHost = {                                          // called by the Mac app (ChordClean)
-  addSongs: async arg => {                                    // a list of songs, or { list, open: true } to also show the (single) song afterwards
+  addSongs: async arg => {                                    // a list of songs, or { list, open: true } to also show the (single) song, edit: true to ask for its title & artist
     const list = Array.isArray(arg) ? arg : ((arg && arg.list) || []);
     await handleFiles(list.map(x => new File([x.text], x.name, { type: 'text/plain' })));
     if (arg && arg.open && list.length === 1) {
       const e = library.find(s => s.name === list[0].name);
-      if (e) { closeLib(); selectSong(e.id); }
+      if (e) { closeLib(); selectSong(e.id); if (arg.edit) editDetails(e.id, true); }   // not awaited: the app need not wait for the typing
     }
   },
   importBackup: async o => { await importBackupFile(new File([o.text], o.name, { type: 'application/json' })); },
